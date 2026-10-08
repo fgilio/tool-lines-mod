@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { ToolDetail } from '../types'
-import { inputSections, outputSections, statusOf, type Section } from './detail'
+import type { ToolDetail, ToolFacts } from '../types'
+import { fieldsOf, inputSections, outputSections, statusOf, type Status } from './detail'
 
 // MARK: Layout
 
@@ -15,15 +15,6 @@ const GUTTER = 4
 const FALLBACK_COLUMNS = 120
 
 // MARK: Row facts
-
-type ToolRow = {
-  tool: string
-  input: unknown
-  output?: unknown
-  isRunning: boolean
-  isErrored: boolean
-  isInterrupted: boolean
-}
 
 // Input fields that name what a call acts on, most telling first; add a key here to cover a new tool.
 const SUBJECT_KEYS = [
@@ -57,42 +48,40 @@ export function shortenSubject(subject: string): string {
 // JSON so the line is never blank, and whitespace is collapsed so a multi-line command can't break
 // the line apart.
 function subjectOf(input: unknown): string {
-  if (typeof input !== 'object' || input === null) return ''
-  const fields = input as Record<string, unknown>
+  const fields = fieldsOf(input)
+  if (fields === undefined) return ''
   const key = SUBJECT_KEYS.find(name => typeof fields[name] === 'string' && fields[name] !== '')
   const raw =
     key !== undefined ? String(fields[key]) : Object.keys(fields).length > 0 ? JSON.stringify(fields) : ''
   return shortenSubject(raw.replace(/\s+/g, ' ').trim())
 }
 
-// An errored call's output is the plain text the model read, so only an object carries result fields.
-function resultField(row: ToolRow, name: string): unknown {
-  return typeof row.output === 'object' && row.output !== null
-    ? (row.output as Record<string, unknown>)[name]
-    : undefined
-}
-
 // Each probe surfaces one fact the hidden result block would have shown; add one here to extend the meta.
-type MetaProbe = (row: ToolRow) => string | undefined
+// An errored call's output is the plain text the model read, so only an object carries result fields.
+type MetaProbe = (row: ToolFacts, result: Record<string, unknown> | undefined) => string | undefined
 
 const META_PROBES: MetaProbe[] = [
-  row => (row.isInterrupted ? 'interrupted' : undefined),
-  row => (row.isErrored && !row.isInterrupted ? 'error' : undefined),
-  row => (resultField(row, 'backgroundTaskId') !== undefined ? 'background' : undefined),
-  row => (resultField(row, 'timedOutAfterMs') !== undefined ? 'timed out' : undefined),
   row => {
-    const printed = `${resultField(row, 'stdout') ?? ''}\n${resultField(row, 'stderr') ?? ''}`
-    return /Shell cwd was reset/.test(printed) ? 'shell cwd was reset' : undefined
+    const status = statusOf(row)
+    return status === 'interrupted' || status === 'error' ? status : undefined
   },
-  row => {
-    const note = resultField(row, 'returnCodeInterpretation')
+  (row, result) => (result?.backgroundTaskId !== undefined ? 'background' : undefined),
+  (row, result) => (result?.timedOutAfterMs !== undefined ? 'timed out' : undefined),
+  (row, result) => {
+    const printed = [result?.stdout, result?.stderr]
+    return printed.some(stream => typeof stream === 'string' && stream.includes('Shell cwd was reset'))
+      ? 'shell cwd was reset'
+      : undefined
+  },
+  (row, result) => {
+    const note = result?.returnCodeInterpretation
     return typeof note === 'string' && note !== '' ? note : undefined
   },
 ]
 
 // MARK: Line
 
-type ToolLine = { tool: string; subject: string; meta: string }
+type ToolLine = { subject: string; meta: string }
 
 function clip(text: string, room: number): string {
   if (text.length <= room) return text
@@ -100,26 +89,25 @@ function clip(text: string, room: number): string {
 }
 
 // The subject is the only part cut, so the tool name and meta always stay readable.
-function lineFor(row: ToolRow, columns: number): ToolLine {
+function lineFor(row: ToolFacts, columns: number): ToolLine {
   // 2 is the dot's column, which the summary text sits beside.
   const width = Math.max(columns - GUTTER - 2, 20)
   const budget = Math.min(Math.max(width, MIN_CHARS), width * MAX_ROWS)
-  const meta = META_PROBES.map(probe => probe(row))
+  const result = fieldsOf(row.output)
+  const meta = META_PROBES.map(probe => probe(row, result))
     .filter(note => note !== undefined)
     .join(', ')
   const frame = `tool_call: ${row.tool}()`.length + (meta === '' ? 0 : ` - ${meta}`.length)
-  return { tool: row.tool, subject: clip(subjectOf(row.input), budget - frame), meta }
+  return { subject: clip(subjectOf(row.input), budget - frame), meta }
 }
 
 // MARK: Status
 
 // The dot alone carries the call's state, so the line needs no "running" text. Theme keys follow
 // the person's theme: warning is its yellow, success its green, error its red.
-function dotStyle(row: ToolRow): { color: string } {
-  if (row.isErrored || row.isInterrupted) return { color: 'error' }
-  // isRunning is false while a call waits its turn or its approval, so only a stored result marks it done.
-  return row.isRunning || row.output === undefined ? { color: 'warning' } : { color: 'success' }
-}
+const DOT_COLORS: Record<Status, string> = { interrupted: 'error', error: 'error', running: 'warning', done: 'success' }
+
+const noteStyle = (isError: boolean) => (isError ? { color: 'error' } : { dimColor: true })
 
 // MARK: View
 
@@ -135,12 +123,6 @@ function isCompact(surface: string): boolean {
 
 const PANE = 'tool-detail'
 const detail = atom({ plugin: 'tool-lines', key: 'detail' } as const, null)
-
-// Code takes no undefined props, so only the fields a section sets are passed on.
-function codeProps(section: Section) {
-  const { label: _label, ...props } = section
-  return Object.fromEntries(Object.entries(props).filter(([, value]) => value !== undefined)) as Omit<Section, 'label'>
-}
 
 // MARK: Hooks
 
@@ -160,7 +142,6 @@ export const register: Register = on => {
     if (!isCompact(e.surface)) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const line = lineFor(e.props, e.viewport?.columns ?? FALLBACK_COLUMNS)
-    const metaStyle = e.props.isErrored ? { color: 'error' } : { dimColor: true }
     const row: ToolDetail = {
       id: e.props.tool_use_id,
       tool: e.props.tool,
@@ -173,11 +154,8 @@ export const register: Register = on => {
 
     // A second click on the call the pane already shows closes it.
     const toggleDetail = async () => {
-      if ((await read($, detail))?.id === row.id) {
-        await update($, detail, () => null)
-        return $.ui.close({ id: PANE })
-      }
-      await update($, detail, () => row)
+      const shown = await update($, detail, current => (current?.id === row.id ? null : row))
+      if (shown === null) return $.ui.close({ id: PANE })
       await $.ui.open({ id: PANE, title: `${row.tool} call` })
     }
 
@@ -186,7 +164,7 @@ export const register: Register = on => {
       marginLeft: 2,
       children: [
         // The dot's own column keeps wrapped rows aligned under the text, as the engine's tool rows do.
-        Box({ minWidth: 2, flexShrink: 0, children: [Text({ ...dotStyle(e.props), children: ['●'] })] }),
+        Box({ minWidth: 2, flexShrink: 0, children: [Text({ color: DOT_COLORS[statusOf(e.props)], children: ['●'] })] }),
         Box({
           flexShrink: 1,
           children: [
@@ -199,9 +177,9 @@ export const register: Register = on => {
                   wrap: 'wrap',
                   children: [
                     Text({ dimColor: true, children: ['tool_call: '] }),
-                    Text({ bold: true, children: [line.tool] }),
+                    Text({ bold: true, children: [row.tool] }),
                     `(${line.subject})`,
-                    ...(line.meta === '' ? [] : [Text({ ...metaStyle, children: [` - ${line.meta}`] })]),
+                    ...(line.meta === '' ? [] : [Text({ ...noteStyle(row.isErrored), children: [` - ${line.meta}`] })]),
                   ],
                 }),
               ],
@@ -230,12 +208,10 @@ export const register: Register = on => {
     const ran = await next(e)
     const shown = await read($, detail)
     if (shown?.id !== e.tool_use_id) return ran
-    const isDenied = ran.deny !== undefined
-    const isErrored = isDenied || ran.isError === true
+    const isErrored = ran.deny !== undefined || ran.isError === true
+    const output = ran.deny ?? (ran.isError ? ran.text : ran.result)
     await update($, detail, current =>
-      current?.id !== e.tool_use_id
-        ? current
-        : { ...current, isRunning: false, isErrored, output: isDenied ? ran.deny : isErrored ? ran.text : ran.result },
+      current?.id === e.tool_use_id ? { ...current, isRunning: false, isErrored, output } : current,
     )
     return ran
   }).catch(($, e, next) => next(e)) // The pane is a view: a failure here never touches the call.
@@ -244,7 +220,7 @@ export const register: Register = on => {
   on('ui.close', { id: PANE }, async ($, e, next) => {
     await update($, detail, () => null)
     return next(e)
-  })
+  }).catch(($, e, next) => next(e)) // A failed clear never keeps the pane open.
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Code } = $.ui.resolve(e)
@@ -259,12 +235,12 @@ export const register: Register = on => {
         Text({
           children: [
             Text({ bold: true, children: [shown.tool] }),
-            Text({ ...(status === 'error' ? { color: 'error' } : { dimColor: true }), children: [` · ${status}`] }),
+            Text({ ...noteStyle(status === 'error'), children: [` · ${status}`] }),
           ],
         }),
         ...sections.flatMap(section => [
           Box({ marginTop: 1, children: [Text({ dimColor: true, children: [section.label] })] }),
-          Code(codeProps(section)),
+          Code(section.code),
         ]),
       ],
     })

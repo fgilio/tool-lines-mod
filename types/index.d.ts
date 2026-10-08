@@ -9,6 +9,9 @@ export type ToolDetail = {
   isInterrupted: boolean
 }
 
+/** What a tool row says about its call, apart from its id. */
+export type ToolFacts = Omit<ToolDetail, 'id'>
+
 declare module 'claude-code' {
   interface PluginState {
     'tool-lines': { detail: ToolDetail | null }
