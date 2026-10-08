@@ -1,0 +1,12 @@
+{
+  "name": "fgilio-mods",
+  "description": "Franco Gilio's Claude Code mods",
+  "owner": { "name": "Franco Gilio" },
+  "plugins": [
+    {
+      "name": "tool-lines",
+      "source": "./",
+      "description": "Draws each tool call as one compact line; click a line to see its full input and result in a side pane"
+    }
+  ]
+}
