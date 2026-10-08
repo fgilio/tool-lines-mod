@@ -1,6 +1,8 @@
 # tool-lines
 
-A Claude Code mod that draws each tool call as one compact line and hides its result block. Click a line to see the full call in a side pane.
+A [Claude Code](https://code.claude.com) mod that draws each tool call as one compact line and hides its result block. Click a line to see the full call in a side pane.
+
+Forked from the `tool-lines` mod in [Tickloop/claude-mods](https://github.com/Tickloop/claude-mods) by [Pulkit Arya](https://github.com/Tickloop). The compact line is their work. This fork adds the detail pane and shorter subjects.
 
 ```
 ● tool_call: Bash(grep -n "x" …/types/claude-code.d.ts)
@@ -15,22 +17,26 @@ A Claude Code mod that draws each tool call as one compact line and hides its re
 - **Detail pane**: click a line to open the call's full input and result in a side pane. Bash shows the command, stdout and stderr. Edit and Write show a diff. Read shows the numbered file lines. Other tools show their JSON. Click the same line again to close the pane.
 - **ctrl+o**: the expanded transcript stays as the engine draws it.
 
+Clicks reach the mod in the fullscreen terminal.
+
 ## Install
 
-```sh
-claude plugin marketplace add ~/dev/tool-lines-mod
-claude plugin install tool-lines@fgilio-mods
+```
+/plugin marketplace add fgilio/claude-plugins
+/plugin install tool-lines@fgilio
 ```
 
-Then run `/reload-plugins`. After you change the code, bump `version` in `.claude-plugin/plugin.json` and run `claude plugin update tool-lines@fgilio-mods`.
+Then run `/reload-plugins`.
 
 ## Develop
 
 ```sh
+claude --plugin-dir .
 claude plugin validate .
 claude plugin test .
 ```
 
 ## Credits
 
-Forked from `tool-lines` in [Tickloop/claude-mods](https://github.com/Tickloop/claude-mods) (commit `1042852`, by Pulkit Arya). That repo has no license, so ask its author before you publish this fork.
+- Original mod: `tool-lines` in [Tickloop/claude-mods](https://github.com/Tickloop/claude-mods), forked at commit [`1042852`](https://github.com/Tickloop/claude-mods/commit/1042852b769b36124ac8718df19710d8027ea1e4).
+- The original repository has no license, so this fork has none either. If you are its author and want it changed or taken down, open an issue.
