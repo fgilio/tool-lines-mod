@@ -306,6 +306,40 @@ test("a second click on the same line closes the pane", async ($, on) => {
   expect(panes.has("tool-detail")).toBe(true);
 });
 
+const bashOutput = (output: object): Row => ({
+  ...BASH_ROW,
+  tool_use_id: "toolu_4",
+  output,
+});
+
+test("shows each Bash stream that printed, and (no output) when neither did", async ($, on) => {
+  fakePanes(on);
+  const opened = async (row: Row) => {
+    await (await mount($, "ToolUse", row)).press({ key: "detail" });
+    const text = await paneText($);
+    await (await mount($, "ToolUse", row)).press({ key: "detail" });
+    return text;
+  };
+
+  const stdoutOnly = await opened(bashOutput({ stdout: "built", stderr: "" }));
+  expect(stdoutOnly).toContain("stdout");
+  expect(stdoutOnly).toContain("built");
+  expect(stdoutOnly).not.toContain("stderr");
+
+  const silent = await opened(bashOutput({ stdout: "", stderr: "" }));
+  expect(silent).toContain("(no output)");
+});
+
+test("shows a result with a stream that is not text as its JSON", async ($, on) => {
+  fakePanes(on);
+  const row = bashOutput({ stdout: "", stderr: ["warning: skipped files"] });
+  await (await mount($, "ToolUse", row)).press({ key: "detail" });
+
+  const text = await paneText($);
+  expect(text).toContain("warning: skipped files");
+  expect(text).not.toContain("(no output)");
+});
+
 test("shows an edit as a diff and a read as numbered file lines", async ($, on) => {
   fakePanes(on);
   const edit = await mount($, "ToolUse", {

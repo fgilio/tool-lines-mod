@@ -80,15 +80,16 @@ const isHunkList = (value: unknown): value is Hunk[] =>
 type OutputProbe = (output: Fields) => Section[] | undefined;
 
 const OUTPUT_PROBES: OutputProbe[] = [
-  // Bash: its two streams, each only when it printed something.
+  // Bash: its two streams, each only when it printed something. A stream of
+  // another shape is not Bash's, so the result falls through to its JSON.
   (output) => {
-    if (typeof output.stdout !== "string" && typeof output.stderr !== "string")
-      return undefined;
+    const { stdout, stderr } = output;
+    if (stdout === undefined && stderr === undefined) return undefined;
+    if (stdout !== undefined && typeof stdout !== "string") return undefined;
+    if (stderr !== undefined && typeof stderr !== "string") return undefined;
     const streams: Section[] = [];
-    if (typeof output.stdout === "string" && output.stdout)
-      streams.push({ label: "stdout", code: { source: output.stdout } });
-    if (typeof output.stderr === "string" && output.stderr)
-      streams.push({ label: "stderr", code: { source: output.stderr } });
+    if (stdout) streams.push({ label: "stdout", code: { source: stdout } });
+    if (stderr) streams.push({ label: "stderr", code: { source: stderr } });
 
     return streams.length > 0
       ? streams
