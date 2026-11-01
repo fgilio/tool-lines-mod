@@ -9,7 +9,7 @@
     "fmt:check": "oxfmt --check",
     "lint": "oxlint --type-aware --deny-warnings .",
     "lint:fix": "oxlint --type-aware --deny-warnings --fix .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.mod.json",
     "lint:md": "markdownlint-cli2",
     "knip": "knip"
   },
