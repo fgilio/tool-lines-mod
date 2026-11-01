@@ -1,32 +1,14 @@
 // Named .spec.ts, not .test.ts: `claude plugin test .` loads every
 // *.test.ts in the mod as a mod test, and this file runs under `bun test`.
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
 
-import {
-  LINT_HEADER,
-  TYPES_PATH,
-  binaryPath,
-  pinnedVersion,
-  versionOf,
-  withLintHeader,
-} from "./claude-code-types";
+import { binaryPath, versionMismatch, versionOf } from "./claude-code-types";
 
-const ROOT = join(import.meta.dir, "..");
-
-const read = (path: string) => Bun.file(join(ROOT, path)).text();
+const HEADER = "// Written by Claude Code 2.1.302.\n// Claude Code ...\n";
 
 describe("versionOf", () => {
   test("reads the version from the declarations' header", () => {
-    expect(
-      versionOf("// Written by Claude Code 2.1.302.\n// Claude Code ..."),
-    ).toBe("2.1.302");
-  });
-
-  test("finds the header below the lint header", () => {
-    expect(
-      versionOf(withLintHeader("// Written by Claude Code 2.1.316.\n")),
-    ).toBe("2.1.316");
+    expect(versionOf(HEADER)).toBe("2.1.302");
   });
 
   test("is null without a header", () => {
@@ -34,15 +16,28 @@ describe("versionOf", () => {
   });
 });
 
-describe("pinnedVersion", () => {
-  test("reads CLAUDE_CODE_VERSION from a workflow", () => {
-    expect(pinnedVersion("env:\n  CLAUDE_CODE_VERSION: 2.1.302\n")).toBe(
-      "2.1.302",
-    );
+describe("versionMismatch", () => {
+  test("passes the pinned release", () => {
+    expect(versionMismatch(HEADER, "2.1.302")).toBeNull();
   });
 
-  test("is null when the workflow pins no version", () => {
-    expect(pinnedVersion("env:\n  OTHER: 1\n")).toBeNull();
+  test("passes any release when nothing is pinned", () => {
+    expect(versionMismatch(HEADER, undefined)).toBeNull();
+    expect(versionMismatch(HEADER, "")).toBeNull();
+  });
+
+  test("names both versions and the fix for another release", () => {
+    const message = versionMismatch(HEADER, "2.1.316");
+
+    expect(message).toContain("Claude Code 2.1.302");
+    expect(message).toContain("pins 2.1.316");
+    expect(message).toContain("Fix:");
+  });
+
+  test("fails declarations with no version when a release is pinned", () => {
+    expect(versionMismatch("declare module 'x' {}", "2.1.302")).toContain(
+      "of no known version",
+    );
   });
 });
 
@@ -57,18 +52,5 @@ describe("binaryPath", () => {
 
   test("leaves a bare command name to PATH", () => {
     expect(binaryPath("claude", "/work")).toBe("claude");
-  });
-});
-
-describe(TYPES_PATH, () => {
-  test("opens with the lint header", async () => {
-    expect((await read(TYPES_PATH)).split("\n", 1)[0]).toBe(LINT_HEADER);
-  });
-
-  test("comes from the Claude Code release CI runs the mod's tests on", async () => {
-    const pinned = pinnedVersion(await read(".github/workflows/ci.yml"));
-
-    expect(pinned).not.toBeNull();
-    expect(versionOf(await read(TYPES_PATH))).toBe(pinned);
   });
 });

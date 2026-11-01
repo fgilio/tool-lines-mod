@@ -1,12 +1,18 @@
-// The mod runs inside Claude Code, which has no Node or Bun globals, so this
-// pass types it against the engine's declarations alone. tsconfig.json is
-// the fleet's copy (fleet-sync keeps it byte-identical) and types every file
-// under Bun, the scripts included.
+// The strict pass over the mod, run by `bun run typecheck:mod` once
+// scripts/claude-code-types.ts has generated the real declarations. Claude
+// Code has no Node or Bun globals, so neither does this pass, and it leaves
+// out types/claude-code-shim.d.ts, the stand-in the fleet's tsconfig.json
+// pass uses when no Claude Code is installed.
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "lib": ["es2023"],
     "types": []
   },
-  "include": ["hooks", "tests", "types"]
+  "include": [
+    "hooks",
+    "tests",
+    "types/index.d.ts",
+    ".claude-plugin/types/claude-code.d.ts"
+  ]
 }

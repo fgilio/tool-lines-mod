@@ -112,7 +112,10 @@ async function paneText($: TestDollar): Promise<string> {
   const texts = await pane.findAll({ type: "Text" });
   const codes = await pane.findAll({ type: "Code" });
   await pane.unmount();
-  return [...texts.map(shown), ...codes.map((found) => found.text)].join("\n");
+  return [
+    ...texts.map(shown),
+    ...codes.map((found: { text: string }) => found.text),
+  ].join("\n");
 }
 
 // MARK: ToolUse

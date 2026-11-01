@@ -39,7 +39,8 @@ You need [Bun](https://bun.sh) and Claude Code.
 
 ```sh
 bun install              # the pinned tools, and the pre-commit hook
-bun run check            # format, lint, type checks, Markdown and bun test
+bun run check            # format, lint, type check, Markdown and bun test
+bun run typecheck:mod    # the strict type check, against Claude Code's types
 claude plugin test .     # the mod's tests, inside Claude Code
 claude plugin validate .
 claude --plugin-dir .    # a session with the mod loaded
@@ -48,8 +49,9 @@ claude --plugin-dir .    # a session with the mod loaded
 The repository follows the fleet standard in [fgilio/claude-plugins](https://github.com/fgilio/claude-plugins/blob/main/fleet/README.md), with the code profile. A few parts are particular to a mod:
 
 - **Tests**: the tests in `tests/` import `claude-code/testing`, so only `claude plugin test .` runs them, and CI does so in its `mod-tests` job. `bun test` lists them as skipped through `bun-shims/claude-code`, and runs the `*.spec.ts` files under `scripts/`. Those are named `.spec.ts` because `claude plugin test` loads every `*.test.ts` as a mod test.
-- **Types**: `types/claude-code.d.ts` holds the plugin API's declarations, as the Claude Code release CI pins writes them. `bun run typecheck` checks every file under Bun with `tsconfig.json`, then the mod alone with `tsconfig.mod.json`, which has no Node or Bun globals, as in Claude Code.
-- **A new Claude Code release**: set `CLAUDE_CODE_VERSION` and `CLAUDE_CODE_SHA256` in `.github/workflows/ci.yml`, then regenerate the types from that release's binary with `bun scripts/claude-code-types.ts --claude <path to claude>`. It runs the binary with no credentials, so it makes no model call. CI fails while the two differ.
+- **Types**: the plugin API's declarations come from the Claude Code binary and are never committed. `bun run typecheck:mod` runs `scripts/claude-code-types.ts`, which writes them to the gitignored `.claude-plugin/types/claude-code.d.ts`, then checks the mod with `tsconfig.mod.json`, which has no Node or Bun globals, as in Claude Code. The script runs the binary with no credentials, so it makes no model call. It uses `--claude <path>`, else `$CLAUDE_CODE_BIN`, else the `claude` on your PATH. CI runs it in `mod-tests` on the pinned release.
+- **Without Claude Code**: `bun run typecheck` (the fleet's pass, in `bun run check`) types the mod against `types/claude-code-shim.d.ts`, a loose stand-in for the few APIs the mod uses. It catches mistakes in the mod's own code, not misuse of the Claude Code API.
+- **A new Claude Code release**: set `CLAUDE_CODE_VERSION` and `CLAUDE_CODE_SHA256` in `.github/workflows/ci.yml` together. `typecheck:mod` fails in CI when the binary's version differs from `CLAUDE_CODE_VERSION`.
 
 ## Credits
 

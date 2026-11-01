@@ -193,7 +193,10 @@ export const register: Register = (on) => {
       const shown = await update($, detail, (current) =>
         current?.id === row.id ? null : row,
       );
-      if (shown === null) return $.ui.close({ id: PANE });
+      if (shown === null) {
+        await $.ui.close({ id: PANE });
+        return;
+      }
       await $.ui.open({ id: PANE, title: `${row.tool} call` });
     };
 
