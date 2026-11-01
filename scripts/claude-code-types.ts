@@ -14,7 +14,7 @@
 // writes. --claude defaults to the `claude` on PATH.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 const ROOT = join(import.meta.dir, "..");
@@ -42,6 +42,14 @@ export function pinnedVersion(workflow: string): string | null {
   return (
     /^\s*CLAUDE_CODE_VERSION:\s*"?([\d.]+)"?\s*$/m.exec(workflow)?.[1] ?? null
   );
+}
+
+/**
+ * The binary to start from the temporary folder: a path resolved against
+ * the working directory, or a bare command name left for PATH to find.
+ */
+export function binaryPath(claude: string, cwd: string): string {
+  return claude.includes("/") ? resolve(cwd, claude) : claude;
 }
 
 /** Prepends the lint header to the engine's output. */
@@ -133,7 +141,9 @@ export async function main(argv: string[]): Promise<number> {
       claude: { type: "string", default: "claude" },
     },
   });
-  const expected = await format(withLintHeader(await generate(values.claude)));
+  const expected = await format(
+    withLintHeader(await generate(binaryPath(values.claude, process.cwd()))),
+  );
   const target = join(ROOT, TYPES_PATH);
   const version = versionOf(expected) ?? "an unknown version";
 

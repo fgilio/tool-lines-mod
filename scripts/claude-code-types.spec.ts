@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   LINT_HEADER,
   TYPES_PATH,
+  binaryPath,
   pinnedVersion,
   versionOf,
   withLintHeader,
@@ -42,6 +43,20 @@ describe("pinnedVersion", () => {
 
   test("is null when the workflow pins no version", () => {
     expect(pinnedVersion("env:\n  OTHER: 1\n")).toBeNull();
+  });
+});
+
+describe("binaryPath", () => {
+  test("resolves a relative path against the working directory", () => {
+    expect(binaryPath("./bin/claude", "/work")).toBe("/work/bin/claude");
+  });
+
+  test("keeps an absolute path", () => {
+    expect(binaryPath("/opt/claude", "/work")).toBe("/opt/claude");
+  });
+
+  test("leaves a bare command name to PATH", () => {
+    expect(binaryPath("claude", "/work")).toBe("claude");
   });
 });
 
