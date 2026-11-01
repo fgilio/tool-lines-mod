@@ -1,0 +1,71 @@
+# Standard CI for a fleet repo. The gates run in the shared workflow, and
+# `ci-success` here is the one required status check on main, so adding or
+# renaming a gate never touches the ruleset.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The Claude Code release the mod's tests run on. Same release and
+  # SHA-256 as fleet-ci.yml's plugin job. Bump by hand.
+  CLAUDE_CODE_VERSION: 2.1.302
+  CLAUDE_CODE_SHA256: 3bc5817207175089cbe0a02a989bdf35b228497f8f76d3c3ba13d568dc8f25e2
+
+jobs:
+  checks:
+    uses: fgilio/claude-plugins/.github/workflows/fleet-ci.yml@5c71d77d775575186f4a0d6d7ace244271daa24e # fleet-ci 2026-11-01
+    with:
+      profile: code
+  # The mod's tests run inside Claude Code, which `bun test` cannot host.
+  mod-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      # The native binary from the npm registry, without the wrapper
+      # package's install script.
+      - name: Install Claude Code ${{ env.CLAUDE_CODE_VERSION }}
+        run: |
+          archive="claude-code-linux-x64-${CLAUDE_CODE_VERSION}.tgz"
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/$archive" \
+            "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/$archive"
+          echo "$CLAUDE_CODE_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" --strip-components=1 package/claude
+      - name: claude plugin test
+        env:
+          DISABLE_TELEMETRY: "1"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        run: '"$RUNNER_TEMP/claude" plugin test .'
+  ci-success:
+    if: ${{ !cancelled() }}
+    needs: [checks, mod-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}

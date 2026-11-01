@@ -1,0 +1,13 @@
+{
+  "name": "claude-code",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "bun": "./index.ts"
+    },
+    "./testing": {
+      "bun": "./testing.ts"
+    }
+  }
+}
