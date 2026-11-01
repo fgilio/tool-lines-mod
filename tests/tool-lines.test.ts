@@ -1,4 +1,5 @@
-import { expect, test, type TestBody } from "claude-code/testing";
+import type { RenderElement, RenderPropsOf } from "claude-code";
+import { expect, test, type Mounted, type TestBody } from "claude-code/testing";
 
 import { shortenSubject } from "../hooks/register";
 
@@ -7,7 +8,11 @@ type TestOn = Parameters<TestBody>[1];
 
 // MARK: Fixtures
 
-const BASH_ROW = {
+type Row = RenderPropsOf["ToolUse"];
+
+type RowComponent = "ToolUse" | "ToolResult" | "UserMessage";
+
+const BASH_ROW: Row = {
   tool_use_id: "toolu_1",
   tool: "Bash",
   input: { command: 'cd /Users/arya/repo && grep -rn "needle" packages' },
@@ -21,26 +26,37 @@ const BASH_ROW = {
   },
 };
 
-const longRow = (length: number) => ({
+const longRow = (length: number): Row => ({
   ...BASH_ROW,
   input: { command: "echo " + "x".repeat(length) },
 });
 
-const RESULT_PROPS = {
+const RESULT_PROPS: RenderPropsOf["ToolResult"] = {
   tool_use_id: "toolu_1",
   tool: "Bash",
   output: BASH_ROW.output,
   isErrored: false,
 };
 
-const PROMPT_PROPS = { text: "find the costs", origin: { kind: "composer" } };
+const prompt = (isExpanded: boolean): RenderPropsOf["UserMessage"] => ({
+  text: "find the costs",
+  origin: { kind: "composer" },
+  isExpanded,
+});
 
-const PANE_PROPS = { bodyColumns: 80, bodyRows: 40, isFocused: false } as never;
+const PANE_PROPS: RenderPropsOf["Pane"] = {
+  title: "Tool call",
+  isFocused: false,
+  bodyColumns: 80,
+  placement: "dock",
+  scroll: { offset: 0, bodyRows: 40 },
+  view: {},
+};
 
-function mount(
+function mount<C extends RowComponent>(
   $: TestDollar,
-  component: "ToolUse" | "ToolResult" | "UserMessage",
-  props: object,
+  component: C,
+  props: RenderPropsOf[C],
   columns = 200,
 ) {
   return $.ui.mount({
@@ -49,7 +65,7 @@ function mount(
     component,
     props,
     viewport: { columns, rows: 50 },
-  } as never);
+  });
 }
 
 // Stands for what the engine draws at any site the mod passes on.
@@ -74,13 +90,13 @@ function fakePanes(on: TestOn): Set<string> {
 // Nested Text children read as one line, the way the terminal paints them.
 function shown(node: unknown): string {
   if (typeof node === "string") return node;
-  if (typeof node !== "object" || node === null) return "";
-  const children = (node as { children?: unknown[] }).children ?? [];
-  return children.map(shown).join("");
+  if (typeof node !== "object" || node === null || !("children" in node))
+    return "";
+  return Array.isArray(node.children) ? node.children.map(shown).join("") : "";
 }
 
 // The outermost Text holding the summary, apart from the dot's column.
-async function lineOf(ui: Awaited<ReturnType<typeof mount>>): Promise<string> {
+async function lineOf(ui: Mounted<"terminal", "ToolUse">): Promise<string> {
   return shown(await ui.find({ type: "Text", text: /tool_call|\(/ }));
 }
 
@@ -126,7 +142,7 @@ test("gives the subject the whole row on a wide terminal", async ($) => {
 });
 
 test("colors the dot yellow while running, green when done, red when errored", async ($) => {
-  const dotColor = async (props: object) =>
+  const dotColor = async (props: Row) =>
     (await (await mount($, "ToolUse", props)).find({ type: "Text", text: "●" }))
       ?.props.color;
   expect(await dotColor({ ...BASH_ROW, isRunning: true })).toBe("warning");
@@ -168,16 +184,10 @@ test("names a file tool by its path", async ($) => {
 
 test("pads below the prompt so the tool block starts apart from it", async ($, on) => {
   fakeEngine(on);
-  const ui = await mount($, "UserMessage", {
-    ...PROMPT_PROPS,
-    isExpanded: false,
-  });
-  const root = (await ui.drawn()) as {
-    type: string;
-    props?: { marginBottom?: number };
-  };
+  const ui = await mount($, "UserMessage", prompt(false));
+  const root: RenderElement = await ui.drawn();
   expect(root.type).toBe("Box");
-  expect(root.props?.marginBottom).toBe(1);
+  expect(root.type === "Box" ? root.props?.marginBottom : undefined).toBe(1);
   expect(shown(root)).toBe("engine");
 });
 
@@ -185,14 +195,16 @@ test("pads below the prompt so the tool block starts apart from it", async ($, o
 
 test("leaves tool rows to the engine while ctrl+o is open", async ($, on) => {
   fakeEngine(on);
-  const drawnBy = async (component: "ToolUse" | "ToolResult", props: object) =>
-    shown(await (await mount($, component, props)).drawn());
+  const drawnBy = async <C extends "ToolUse" | "ToolResult">(
+    component: C,
+    props: RenderPropsOf[C],
+  ) => shown(await (await mount($, component, props)).drawn());
 
-  await mount($, "UserMessage", { ...PROMPT_PROPS, isExpanded: true });
+  await mount($, "UserMessage", prompt(true));
   expect(await drawnBy("ToolUse", BASH_ROW)).toBe("engine");
   expect(await drawnBy("ToolResult", RESULT_PROPS)).toBe("engine");
 
-  await mount($, "UserMessage", { ...PROMPT_PROPS, isExpanded: false });
+  await mount($, "UserMessage", prompt(false));
   expect(await drawnBy("ToolUse", BASH_ROW)).toMatch(/^●tool_call: Bash/);
 });
 
@@ -201,9 +213,9 @@ test("leaves tool rows to the engine while ctrl+o is open", async ($, on) => {
 test("unfolds a group of reads and searches into one row per call", async ($, on) => {
   let isExpanded: boolean | undefined;
   // Stands in for the engine beneath the mod, recording what it was asked to draw.
-  on("ui.render", { component: "ToolGroup" }, async ($, e) => {
+  on("ui.render", { component: "ToolGroup" }, async (engine, e) => {
     isExpanded = e.props.isExpanded;
-    const { Text } = $.ui.resolve(e);
+    const { Text } = engine.ui.resolve(e);
     return Text({ children: ["engine"] });
   });
   await $.ui.mount({

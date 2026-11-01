@@ -11,10 +11,11 @@ type Hunk = BuiltinToolResults["Edit"]["structuredPatch"][number];
 
 type Fields = Record<string, unknown>;
 
+const isFields = (value: unknown): value is Fields =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 export const fieldsOf = (value: unknown): Fields | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Fields)
-    : undefined;
+  isFields(value) ? value : undefined;
 
 const json = (value: unknown): string =>
   JSON.stringify(value, null, 2) ?? String(value);
@@ -84,16 +85,10 @@ const OUTPUT_PROBES: OutputProbe[] = [
     if (typeof output.stdout !== "string" && typeof output.stderr !== "string")
       return undefined;
     const streams: Section[] = [];
-    if (output.stdout)
-      streams.push({
-        label: "stdout",
-        code: { source: String(output.stdout) },
-      });
-    if (output.stderr)
-      streams.push({
-        label: "stderr",
-        code: { source: String(output.stderr) },
-      });
+    if (typeof output.stdout === "string" && output.stdout)
+      streams.push({ label: "stdout", code: { source: output.stdout } });
+    if (typeof output.stderr === "string" && output.stderr)
+      streams.push({ label: "stderr", code: { source: output.stderr } });
 
     return streams.length > 0
       ? streams
@@ -113,7 +108,10 @@ const OUTPUT_PROBES: OutputProbe[] = [
       return [
         {
           label: "Created",
-          code: { source: output.content, path: String(output.filePath ?? "") },
+          code: {
+            source: output.content,
+            path: typeof output.filePath === "string" ? output.filePath : "",
+          },
         },
       ];
     }
