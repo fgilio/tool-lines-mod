@@ -8,7 +8,6 @@
         "@tsconfig/bun": "1.0.11",
         "@tsconfig/strictest": "2.0.8",
         "@types/bun": "1.4.4",
-        "claude-code": "file:./bun-shims/claude-code",
         "knip": "6.44.1",
         "lefthook": "2.2.2",
         "markdownlint-cli2": "0.24.0",
@@ -276,8 +275,6 @@
     "character-entities-legacy": ["character-entities-legacy@3.0.0", "", {}, "sha512-RpPp0asT/6ufRm//AJVwpViZbGM/MkjQFxJccQRHmISF/22NBtsHqAWmL+/pmkPWoIUJdWyeVleTl1wydHATVQ=="],
 
     "character-reference-invalid": ["character-reference-invalid@2.0.1", "", {}, "sha512-iBZ4F4wRbyORVsu0jPV7gXkOsGYjGHPmAyv+HiHG8gi5PtC9KI2j1+v8/tlibRvjoWX027ypmG/n0HtO5t7unw=="],
-
-    "claude-code": ["claude-code@file:bun-shims/claude-code", {}],
 
     "commander": ["commander@8.3.0", "", {}, "sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww=="],
 

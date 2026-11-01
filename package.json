@@ -4,7 +4,7 @@
   "type": "module",
   "packageManager": "bun@1.4.4",
   "scripts": {
-    "check": "bun run fmt:check && bun run lint && bun run typecheck && bun run lint:md && bun test",
+    "check": "bun run fmt:check && bun run lint && bun run typecheck && bun run lint:md && bun run test",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint --type-aware --deny-warnings .",
@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:mod": "bun scripts/claude-code-types.ts && tsc --noEmit -p tsconfig.mod.json",
     "lint:md": "markdownlint-cli2",
+    "test": "bun test ./scripts",
     "knip": "knip"
   },
   "trustedDependencies": [
@@ -21,7 +22,6 @@
     "@tsconfig/bun": "1.0.11",
     "@tsconfig/strictest": "2.0.8",
     "@types/bun": "1.4.4",
-    "claude-code": "file:./bun-shims/claude-code",
     "knip": "6.44.1",
     "lefthook": "2.2.2",
     "markdownlint-cli2": "0.24.0",
