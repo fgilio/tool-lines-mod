@@ -1,7 +1,8 @@
 {
   "name": "tool-lines",
-  "version": "0.2.1",
   "description": "Draws each tool call as one compact line; click a line to see its full input and result in a side pane",
   "author": { "name": "Franco Gilio" },
+  "license": "MIT",
+  "repository": "https://github.com/fgilio/tool-lines-mod",
   "types": "./types/index.d.ts"
 }
