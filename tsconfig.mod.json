@@ -1,0 +1,20 @@
+// The strict pass over the mod, run by `bun run typecheck:mod` once
+// scripts/claude-code-types.ts has generated the real declarations. Claude
+// Code has no Node or Bun globals, so neither does this pass, and it leaves
+// out types/claude-code-shim.d.ts, the stand-in the fleet's tsconfig.json
+// pass uses when no Claude Code is installed. It resets the fleet's
+// exclude, which drops hidden folders and so the generated file.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2023"],
+    "types": []
+  },
+  "include": [
+    "hooks",
+    "tests",
+    "types/index.d.ts",
+    ".claude-plugin/types/claude-code.d.ts"
+  ],
+  "exclude": ["node_modules"]
+}
