@@ -56,4 +56,7 @@ The repository follows the fleet standard in [fgilio/claude-plugins](https://git
 ## Credits
 
 - Original mod: `tool-lines` in [Tickloop/claude-mods](https://github.com/Tickloop/claude-mods), forked at commit [`1042852`](https://github.com/Tickloop/claude-mods/commit/1042852b769b36124ac8718df19710d8027ea1e4).
-- The original repository has no license. This fork is MIT licensed (see [LICENSE](LICENSE)), which covers the changes made here. If you are the original author and want the terms of your part changed or the fork taken down, open an issue.
+
+## License
+
+The MIT license in [LICENSE](LICENSE) covers only this fork's own changes. The code inherited from the `tool-lines` mod in [Tickloop/claude-mods](https://github.com/Tickloop/claude-mods) carries no license grant from its author, so anyone who redistributes it needs that author's permission. If you are that author and want the terms of your part changed or the fork taken down, open an issue.

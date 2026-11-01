@@ -22,8 +22,10 @@ SOFTWARE.
 
 ---
 
-This mod is a fork of the tool-lines mod in Tickloop/claude-mods
-(https://github.com/Tickloop/claude-mods), forked at commit 1042852. That
-repository carries no license of its own, so this license covers the changes
-made in this fork. If you are the original author and want the terms of your
-part changed or the fork taken down, open an issue.
+Scope of this license: this mod is a fork of the tool-lines mod in
+Tickloop/claude-mods (https://github.com/Tickloop/claude-mods), forked at
+commit 1042852. The MIT grant above covers only the changes made in this
+fork. The code inherited from tool-lines carries no license grant from its
+author, so anyone who redistributes it needs that author's permission. If you
+are that author and want the terms of your part changed or the fork taken
+down, open an issue.
