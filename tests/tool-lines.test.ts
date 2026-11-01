@@ -1,4 +1,4 @@
-import type { RenderElement, RenderPropsOf } from "claude-code";
+import type { RenderPropsOf } from "claude-code";
 import { expect, test, type Mounted, type TestBody } from "claude-code/testing";
 
 import { shortenSubject } from "../hooks/register";
@@ -112,10 +112,7 @@ async function paneText($: TestDollar): Promise<string> {
   const texts = await pane.findAll({ type: "Text" });
   const codes = await pane.findAll({ type: "Code" });
   await pane.unmount();
-  return [
-    ...texts.map(shown),
-    ...codes.map((found: { text: string }) => found.text),
-  ].join("\n");
+  return [...texts.map(shown), ...codes.map((found) => found.text)].join("\n");
 }
 
 // MARK: ToolUse
@@ -188,7 +185,7 @@ test("names a file tool by its path", async ($) => {
 test("pads below the prompt so the tool block starts apart from it", async ($, on) => {
   fakeEngine(on);
   const ui = await mount($, "UserMessage", prompt(false));
-  const root: RenderElement = await ui.drawn();
+  const root = await ui.drawn();
   expect(root.type).toBe("Box");
   expect(root.type === "Box" ? root.props?.marginBottom : undefined).toBe(1);
   expect(shown(root)).toBe("engine");
