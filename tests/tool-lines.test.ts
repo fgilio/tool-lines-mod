@@ -1,5 +1,11 @@
 import type { RenderPropsOf } from "claude-code";
-import { expect, test, type Mounted, type TestBody } from "claude-code/testing";
+import {
+  expect,
+  mock,
+  test,
+  type Mounted,
+  type TestBody,
+} from "claude-code/testing";
 
 import { shortenSubject } from "../hooks/register";
 
@@ -280,9 +286,16 @@ test("leaves URLs whole", () => {
 
 // MARK: Detail pane
 
-test("a click on a tool line opens its full call in the side pane", async ($, on) => {
+// The two presses of a double click, at one moment of the clock.
+async function doubleClick(ui: Mounted<"terminal", "ToolUse">) {
+  await ui.press({ key: "detail" });
+  await ui.press({ key: "detail" });
+}
+
+test("a double click on a tool line opens its full call in the side pane", async ($, on) => {
+  mock.clock(on);
   const panes = fakePanes(on);
-  await (await mount($, "ToolUse", BASH_ROW)).press({ key: "detail" });
+  await doubleClick(await mount($, "ToolUse", BASH_ROW));
 
   expect(panes.has("tool-detail")).toBe(true);
   const text = await paneText($);
@@ -291,16 +304,100 @@ test("a click on a tool line opens its full call in the side pane", async ($, on
   expect(text).toContain("stderr");
 });
 
-test("a second click on the same line closes the pane", async ($, on) => {
+test("a single click on a tool line leaves the pane closed", async ($, on) => {
+  const clock = mock.clock(on);
+  const panes = fakePanes(on);
+  const ui = await mount($, "ToolUse", { ...BASH_ROW, tool_use_id: "toolu_5" });
+
+  await ui.press({ key: "detail" });
+  expect(panes.has("tool-detail")).toBe(false);
+
+  // Two clicks too far apart are two single clicks.
+  await clock.advance(301);
+  await ui.press({ key: "detail" });
+  expect(panes.has("tool-detail")).toBe(false);
+
+  await clock.advance(300);
+  await ui.press({ key: "detail" });
+  expect(panes.has("tool-detail")).toBe(true);
+});
+
+test("clicks on two different lines are not a double click", async ($, on) => {
+  mock.clock(on);
+  const panes = fakePanes(on);
+  const first = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    tool_use_id: "toolu_6",
+  });
+  const second = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    tool_use_id: "toolu_7",
+  });
+
+  await first.press({ key: "detail" });
+  await second.press({ key: "detail" });
+  expect(panes.has("tool-detail")).toBe(false);
+
+  await second.press({ key: "detail" });
+  expect(panes.has("tool-detail")).toBe(true);
+});
+
+test("one click on the line the pane shows closes it", async ($, on) => {
+  const clock = mock.clock(on);
   const panes = fakePanes(on);
   const ui = await mount($, "ToolUse", BASH_ROW);
+  await doubleClick(ui);
+
+  await clock.advance(301);
   await ui.press({ key: "detail" });
+  expect(panes.has("tool-detail")).toBe(false);
+
+  // The closing click does not pair with the next one.
   await ui.press({ key: "detail" });
   expect(panes.has("tool-detail")).toBe(false);
 
   // Closed, the same line opens it again.
+  await clock.advance(301);
+  await doubleClick(ui);
+  expect(panes.has("tool-detail")).toBe(true);
+});
+
+test("the third click of a triple click leaves the pane open", async ($, on) => {
+  const clock = mock.clock(on);
+  const panes = fakePanes(on);
+  const ui = await mount($, "ToolUse", { ...BASH_ROW, tool_use_id: "toolu_8" });
+
+  await doubleClick(ui);
   await ui.press({ key: "detail" });
   expect(panes.has("tool-detail")).toBe(true);
+
+  await clock.advance(301);
+  await ui.press({ key: "detail" });
+  expect(panes.has("tool-detail")).toBe(false);
+});
+
+test("one click on another line leaves the pane on its call", async ($, on) => {
+  const clock = mock.clock(on);
+  const panes = fakePanes(on);
+  const first = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    tool_use_id: "toolu_9",
+  });
+  const second = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    tool_use_id: "toolu_10",
+    input: { command: "echo second" },
+  });
+  await doubleClick(first);
+
+  await clock.advance(301);
+  await second.press({ key: "detail" });
+  expect(panes.has("tool-detail")).toBe(true);
+  expect(await paneText($)).not.toContain("echo second");
+
+  // A double click on another line moves the pane to its call.
+  await second.press({ key: "detail" });
+  expect(await paneText($)).toContain("echo second");
 });
 
 const bashOutput = (output: object): Row => ({
@@ -310,11 +407,14 @@ const bashOutput = (output: object): Row => ({
 });
 
 test("shows each Bash stream that printed, and (no output) when neither did", async ($, on) => {
+  const clock = mock.clock(on);
   fakePanes(on);
   const opened = async (row: Row) => {
-    await (await mount($, "ToolUse", row)).press({ key: "detail" });
+    const ui = await mount($, "ToolUse", row);
+    await doubleClick(ui);
     const text = await paneText($);
-    await (await mount($, "ToolUse", row)).press({ key: "detail" });
+    await clock.advance(301);
+    await ui.press({ key: "detail" });
     return text;
   };
 
@@ -328,9 +428,10 @@ test("shows each Bash stream that printed, and (no output) when neither did", as
 });
 
 test("shows a result with a stream that is not text as its JSON", async ($, on) => {
+  mock.clock(on);
   fakePanes(on);
   const row = bashOutput({ stdout: "", stderr: ["warning: skipped files"] });
-  await (await mount($, "ToolUse", row)).press({ key: "detail" });
+  await doubleClick(await mount($, "ToolUse", row));
 
   const text = await paneText($);
   expect(text).toContain("warning: skipped files");
@@ -338,6 +439,7 @@ test("shows a result with a stream that is not text as its JSON", async ($, on) 
 });
 
 test("shows an edit as a diff and a read as numbered file lines", async ($, on) => {
+  mock.clock(on);
   fakePanes(on);
   const edit = await mount($, "ToolUse", {
     ...BASH_ROW,
@@ -357,7 +459,7 @@ test("shows an edit as a diff and a read as numbered file lines", async ($, on) 
       ],
     },
   });
-  await edit.press({ key: "detail" });
+  await doubleClick(edit);
   expect(await paneText($)).toContain("@@ -1,1 +1,1 @@\n-a\n+b");
 
   const readCall = await mount($, "ToolUse", {
@@ -376,6 +478,6 @@ test("shows an edit as a diff and a read as numbered file lines", async ($, on) 
       },
     },
   });
-  await readCall.press({ key: "detail" });
+  await doubleClick(readCall);
   expect(await paneText($)).toContain("hello");
 });

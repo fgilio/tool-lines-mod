@@ -152,6 +152,16 @@ function isCompact(surface: string): boolean {
 const PANE = "tool-detail";
 const detail = atom({ plugin: "tool-lines", key: "detail" } as const, null);
 
+const DOUBLE_PRESS_MS = 300;
+let lastPress: { id: string; at: number } | undefined;
+
+// Records the press and says whether it came quickly after the last press on the same line.
+function followsQuickly(id: string, at: number): boolean {
+  const isQuick = lastPress?.id === id && at - lastPress.at <= DOUBLE_PRESS_MS;
+  lastPress = { id, at };
+  return isQuick;
+}
+
 // MARK: Hooks
 
 export const register: Register = (on) => {
@@ -188,15 +198,21 @@ export const register: Register = (on) => {
       isInterrupted: e.props.isInterrupted,
     };
 
-    // A second click on the call the pane already shows closes it.
-    const toggleDetail = async () => {
-      const shown = await update($, detail, (current) =>
-        current?.id === row.id ? null : row,
-      );
-      if (shown === null) {
+    const pressLine = async () => {
+      const isQuick = followsQuickly(row.id, await $.clock.now());
+      const isShown = (await read($, detail))?.id === row.id;
+      // The rest of a quick burst (a triple click) never closes the pane its double click opened.
+      if (isShown && isQuick) return;
+      if (isShown) {
+        // The click that closes the pane is never the first half of a double click.
+        lastPress = undefined;
+        await update($, detail, () => null);
         await $.ui.close({ id: PANE });
         return;
       }
+      // Opening takes a double click, so a stray click or a text selection never opens the pane.
+      if (!isQuick) return;
+      await update($, detail, () => row);
       await $.ui.open({ id: PANE, title: `${row.tool} call` });
     };
 
@@ -218,7 +234,7 @@ export const register: Register = (on) => {
             Button({
               key: "detail",
               plain: true,
-              onPress: toggleDetail,
+              onPress: pressLine,
               children: [
                 Text({
                   wrap: "wrap",
@@ -272,7 +288,7 @@ export const register: Register = (on) => {
     return ran;
   }).catch(($, e, next) => next(e)); // The pane is a view: a failure here never touches the call.
 
-  // Closed by its close mark or Esc, the next click on the same line opens it again.
+  // Closed by a click, its close mark or Esc, the next double click on the same line opens it again.
   on("ui.close", { id: PANE }, async ($, e, next) => {
     await update($, detail, () => null);
     return next(e);
@@ -284,7 +300,7 @@ export const register: Register = (on) => {
     if (shown === null)
       return Text({
         dimColor: true,
-        children: ["Click a tool line to see its call here."],
+        children: ["Double-click a tool line to see its call here."],
       });
     const status = statusOf(shown);
     const sections = [...inputSections(shown), ...outputSections(shown)];
