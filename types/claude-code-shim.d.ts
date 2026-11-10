@@ -236,7 +236,6 @@ declare module "claude-code" {
 
   export interface EngineInterface {
     state: Opaque<"state">;
-    clock: { now: () => Promise<number> };
     ui: {
       invalidate: (event: "ui.render") => void;
       resolve: (e: { surface: RenderSurface }) => ElementTable;
@@ -367,15 +366,9 @@ declare module "claude-code/testing" {
 
   export const test: (name: string, body: TestBody) => void;
 
-  export type MockClock = {
-    now: () => number;
-    advance: (ms: number) => Promise<void>;
-  };
-
-  export const mock: { clock: (on: On) => MockClock };
-
   export type Matchers = {
     toBe: (expected: unknown) => void;
+    toEqual: (expected: unknown) => void;
     toContain: (item: unknown) => void;
     toMatch: (pattern: string | RegExp) => void;
   };
