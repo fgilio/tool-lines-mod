@@ -62,6 +62,7 @@ declare module "claude-code" {
     key?: string;
     label?: string;
     plain?: true;
+    hover?: { scope?: string; underline?: boolean };
     // Claude Code types it `=> void`, and its own examples return a promise
     // from it. The mod returns the toggle's promise, so the press stays tied
     // to the `$.ui.open` it makes (an open the person asked for).
