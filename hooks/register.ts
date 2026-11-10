@@ -195,6 +195,9 @@ export const register: Register = (on) => {
       isInterrupted: e.props.isInterrupted,
     };
 
+    // The dot and the label underline together under the pointer, to show they take the click.
+    const hover = { scope: `open-${row.id}`, underline: true } as const;
+
     // A click on the call the pane already shows closes it.
     const toggleDetail = async () => {
       const shown = await update($, detail, (current) =>
@@ -219,6 +222,7 @@ export const register: Register = (on) => {
             Button({
               key: "detail-dot",
               plain: true,
+              hover,
               onPress: toggleDetail,
               children: [
                 Text({ color: DOT_COLORS[statusOf(e.props)], children: ["●"] }),
@@ -233,6 +237,7 @@ export const register: Register = (on) => {
             Button({
               key: "detail",
               plain: true,
+              hover,
               onPress: toggleDetail,
               children: [
                 Text({ dimColor: true, children: ["tool_call: "] }),

@@ -95,6 +95,18 @@ function shown(node: unknown): string {
   return Array.isArray(node.children) ? node.children.map(shown).join("") : "";
 }
 
+// The hover of each Button in the tree, which the tree keeps beside its props.
+function buttonHovers(node: unknown): unknown[] {
+  if (typeof node !== "object" || node === null) return [];
+  const own =
+    "type" in node && node.type === "Button" && "hover" in node
+      ? [node.hover]
+      : [];
+  const children =
+    "children" in node && Array.isArray(node.children) ? node.children : [];
+  return [...own, ...children.flatMap(buttonHovers)];
+}
+
 // The whole row as one line, apart from the dot's column.
 async function lineOf(ui: Mounted<"terminal", "ToolUse">): Promise<string> {
   return shown(await ui.drawn()).replace(/^●/, "");
@@ -301,6 +313,14 @@ test("only the dot and the name take clicks, never the subject", async ($) => {
   const ui = await mount($, "ToolUse", BASH_ROW);
   const buttons = await ui.findAll({ type: "Button" });
   expect(buttons.map(shown)).toEqual(["●", "tool_call: Bash"]);
+});
+
+test("the dot and the name underline together under the pointer", async ($) => {
+  const ui = await mount($, "ToolUse", BASH_ROW);
+  expect(buttonHovers(await ui.drawn())).toEqual([
+    { scope: "open-toolu_1", underline: true },
+    { scope: "open-toolu_1", underline: true },
+  ]);
 });
 
 test("a second click on the same line closes the pane", async ($, on) => {
