@@ -38,23 +38,69 @@ const SUBJECT_KEYS = [
 ];
 
 // Setup the reader skips to find the command that does the work: `T=/long/path;` and `cd dir &&`.
+// A word stops at a shell operator, so `cd site;pwd` drops `cd site;` alone.
 const SHELL_SETUP =
-  /^(?:(?:[A-Za-z_]\w*=\S*|cd\s+\S+|set\s+-\w+)\s*(?:;|&&)\s*)+/;
-const HOME = /(?:\/Users|\/home)\/[^/\s'"]+/g;
+  /^(?:(?:[A-Za-z_]\w*=[^\s;&|<>]*|cd\s+[^\s;&|<>]+|set\s+[-+]\w+)\s*(?:;|&&)\s*)+/;
+// What a path segment holds: anything but a separator, a quote or a shell operator.
+const SEGMENT = String.raw`[^/\s'"\x60;&|<>()]+`;
 // A path past three segments keeps its last two: the folder and the file are what tell it apart.
-const LONG_PATH = /(?<![\w:/.~])(?:~|\.{0,2})?(?:\/[^/\s'"]+){3,}/g;
+const LONG_PATH = new RegExp(
+  String.raw`(?<![\w:/.~])(?:~|\.{0,2})?(?:/${SEGMENT}){3,}`,
+  "g",
+);
+// A URL keeps every character: its path is the server's, not a file here.
+const URL_TOKEN = /[A-Za-z][\w+.-]*:\/\/[^\s'"\x60<>]+/g;
 
-export function shortenSubject(subject: string): string {
-  return subject
-    .replace(SHELL_SETUP, "")
-    .replace(HOME, "~")
-    .replace(LONG_PATH, (path) => "…/" + path.split("/").slice(-2).join("/"));
+const escapeRegExp = (text: string) =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Paths in `text` with the current home as `~` and long ones cut to their last two segments. */
+export function shortenPaths(text: string, home: string | undefined): string {
+  const pieces = text.split(URL_TOKEN);
+  const urls = text.match(URL_TOKEN) ?? [];
+  // The home folder alone, at a path boundary: `/home/alice2` is not `/home/alice`.
+  const homePath =
+    home === undefined || home === "" || home === "/"
+      ? undefined
+      : new RegExp(
+          String.raw`(?<![\w:/.~-])${escapeRegExp(home.replace(/\/+$/, ""))}(?=/|$|[\s'"\x60;&|<>()])`,
+          "g",
+        );
+  return pieces
+    .map((piece, index) => {
+      const shortened = (
+        homePath === undefined ? piece : piece.replace(homePath, "~")
+      ).replace(
+        LONG_PATH,
+        (path) => "…/" + path.split("/").slice(-2).join("/"),
+      );
+      return shortened + (urls[index] ?? "");
+    })
+    .join("");
 }
+
+/** A shell command from the command that does the work, its paths shortened. */
+export function shortenCommand(
+  command: string,
+  home: string | undefined,
+): string {
+  const work = command.replace(SHELL_SETUP, "");
+  return shortenPaths(work === "" ? command : work, home);
+}
+
+// How each subject field reads on the line: a command and a path shorten; a URL, a pattern, a
+// query or a prompt is the person's own text and stays as written.
+const SHORTEN_BY_KEY: Record<string, typeof shortenPaths> = {
+  command: shortenCommand,
+  file_path: shortenPaths,
+  notebook_path: shortenPaths,
+  path: shortenPaths,
+};
 
 // This extracts the main argument of a tool call. Tools with no known key fall back to their raw
 // JSON so the line is never blank, and whitespace is collapsed so a multi-line command can't break
 // the line apart.
-function subjectOf(input: unknown): string {
+function subjectOf(input: unknown, home: string | undefined): string {
   const fields = fieldsOf(input);
   if (fields === undefined) return "";
   const key = SUBJECT_KEYS.find(
@@ -66,7 +112,9 @@ function subjectOf(input: unknown): string {
       : Object.keys(fields).length > 0
         ? JSON.stringify(fields)
         : "";
-  return shortenSubject(raw.replace(/\s+/g, " ").trim());
+  const subject = raw.replace(/\s+/g, " ").trim();
+  const shorten = key === undefined ? undefined : SHORTEN_BY_KEY[key];
+  return shorten === undefined ? subject : shorten(subject, home);
 }
 
 // Each probe surfaces one fact the hidden result block would have shown; add one here to extend the meta.
@@ -110,7 +158,11 @@ function clip(text: string, room: number): string {
 }
 
 // The subject is the only part cut, so the tool name and meta always stay readable.
-function lineFor(row: ToolFacts, columns: number): ToolLine {
+function lineFor(
+  row: ToolFacts,
+  columns: number,
+  home: string | undefined,
+): ToolLine {
   // 2 is the dot's column, which the summary text sits beside.
   const width = Math.max(columns - GUTTER - 2, 20);
   const label = labelOf(row.tool);
@@ -125,7 +177,7 @@ function lineFor(row: ToolFacts, columns: number): ToolLine {
     column * MAX_ROWS,
   );
   const frame = "()".length + (meta === "" ? 0 : ` - ${meta}`.length);
-  return { subject: clip(subjectOf(row.input), budget - frame), meta };
+  return { subject: clip(subjectOf(row.input, home), budget - frame), meta };
 }
 
 const labelOf = (tool: string) => `tool_call: ${tool}`;
@@ -161,6 +213,16 @@ function noteView($: EngineInterface, isExpanded: boolean | undefined): void {
   if (isExpanded === undefined || isExpanded === isExpandedView) return;
   isExpandedView = isExpanded;
   $.ui.invalidate("ui.render");
+}
+
+// MARK: Home
+
+// The current user's home folder, read once: only it is written as `~` on a line.
+let home: Promise<string | undefined> | undefined;
+
+function homeOf($: EngineInterface): Promise<string | undefined> {
+  home ??= $.env.get("HOME").catch(() => undefined);
+  return home;
 }
 
 // MARK: Detail pane
@@ -238,7 +300,11 @@ export const register: Register = (on) => {
   on("ui.render", { component: "ToolUse" }, async ($, e, next) => {
     if (!isCompact(e.surface)) return next(e);
     const { Box, Text, Button } = $.ui.resolve(e);
-    const line = lineFor(e.props, e.viewport?.columns ?? FALLBACK_COLUMNS);
+    const line = lineFor(
+      e.props,
+      e.viewport?.columns ?? FALLBACK_COLUMNS,
+      await homeOf($),
+    );
     const row: ToolDetail = {
       id: e.props.tool_use_id,
       tool: e.props.tool,

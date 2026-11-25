@@ -1,7 +1,13 @@
 import type { RenderPropsOf } from "claude-code";
-import { expect, test, type Mounted, type TestBody } from "claude-code/testing";
+import {
+  expect,
+  mock,
+  test,
+  type Mounted,
+  type TestBody,
+} from "claude-code/testing";
 
-import { shortenSubject } from "../hooks/register";
+import { shortenCommand, shortenPaths } from "../hooks/register";
 
 type TestDollar = Parameters<TestBody>[0];
 type TestOn = Parameters<TestBody>[1];
@@ -67,6 +73,8 @@ function mount<C extends RowComponent>(
     viewport: { columns, rows: 50 },
   });
 }
+
+const HOME = "/Users/arya";
 
 // Stands for what the engine draws at any site the mod passes on.
 function fakeEngine(on: TestOn) {
@@ -143,7 +151,8 @@ async function paneText($: TestDollar): Promise<string> {
 
 // MARK: ToolUse
 
-test("draws a tool call as one compact line with its meta", async ($) => {
+test("draws a tool call as one compact line with its meta", async ($, on) => {
+  mock.env(on, { HOME });
   expect(await lineOf(await mount($, "ToolUse", BASH_ROW))).toBe(
     'tool_call: Bash(grep -rn "needle" packages) - shell cwd was reset',
   );
@@ -196,7 +205,8 @@ test("leaves running to the dot and marks errored calls", async ($) => {
   expect(await lineOf(failed)).toMatch(/\) - error$/);
 });
 
-test("names a file tool by its path", async ($) => {
+test("names a file tool by its path", async ($, on) => {
+  mock.env(on, { HOME });
   const ui = await mount($, "ToolUse", {
     ...BASH_ROW,
     tool: "Read",
@@ -305,31 +315,81 @@ test("hides the result block", async ($) => {
 // MARK: Subject
 
 test("drops shell setup so the line starts at the command that does the work", () => {
-  expect(shortenSubject('T=/private/tmp/x/types/a.d.ts; grep -n "x" $T')).toBe(
-    'grep -n "x" $T',
-  );
-  expect(shortenSubject("set -e; cd ~/dev/mod && cat a.json")).toBe(
+  expect(
+    shortenCommand('T=/private/tmp/x/types/a.d.ts; grep -n "x" $T', HOME),
+  ).toBe('grep -n "x" $T');
+  expect(shortenCommand("set -e; cd ~/dev/mod && cat a.json", HOME)).toBe(
     "cat a.json",
   );
-  expect(shortenSubject("A=1 && B=2; ls")).toBe("ls");
+  expect(shortenCommand("A=1 && B=2; ls", HOME)).toBe("ls");
+});
+
+test("stops shell setup at the first command separator", () => {
+  expect(shortenCommand("cd site;pwd; ls", HOME)).toBe("pwd; ls");
+  expect(shortenCommand("cd a&&b", HOME)).toBe("b");
+});
+
+test("keeps a command that is all setup", () => {
+  expect(shortenCommand("X=1;", HOME)).toBe("X=1;");
+  expect(shortenCommand("cd /tmp &&", HOME)).toBe("cd /tmp &&");
+});
+
+test("keeps shell operators outside shortened paths", () => {
+  expect(shortenCommand("cat /a/b/c/d>/tmp/log", HOME)).toBe(
+    "cat …/c/d>/tmp/log",
+  );
+  expect(shortenCommand("cat /a/b/c/d|/usr/local/bin/sort", HOME)).toBe(
+    "cat …/c/d|…/bin/sort",
+  );
+  expect(shortenCommand("cat /a/b/c/d;echo /x/y/z/w", HOME)).toBe(
+    "cat …/c/d;echo …/z/w",
+  );
 });
 
 test("writes home as ~ and keeps the last two segments of a long path", () => {
-  expect(shortenSubject("/Users/arya/notes.md")).toBe("~/notes.md");
+  expect(shortenPaths("/Users/arya/notes.md", HOME)).toBe("~/notes.md");
   expect(
-    shortenSubject(
+    shortenCommand(
       "cat /private/tmp/claude-501/bundled/types/claude-code.d.ts",
+      HOME,
     ),
   ).toBe("cat …/types/claude-code.d.ts");
-  expect(shortenSubject("/Users/arya/dev/mod/hooks/register.ts")).toBe(
+  expect(shortenPaths("/Users/arya/dev/mod/hooks/register.ts", HOME)).toBe(
     "…/hooks/register.ts",
   );
 });
 
-test("leaves URLs whole", () => {
+test("writes only the current home as ~", () => {
+  expect(shortenCommand("cat /home/alice/a /home/bob/a", "/home/alice")).toBe(
+    "cat ~/a …/bob/a",
+  );
+  expect(shortenCommand("ls /Users/arya2/a", HOME)).toBe("ls …/arya2/a");
+  expect(shortenCommand("cat /home/bob/a", undefined)).toBe("cat …/bob/a");
+});
+
+test("leaves URLs whole, in a command too", () => {
   expect(
-    shortenSubject("https://github.com/Tickloop/claude-mods/tree/main"),
+    shortenCommand("https://github.com/Tickloop/claude-mods/tree/main", HOME),
   ).toBe("https://github.com/Tickloop/claude-mods/tree/main");
+  expect(
+    shortenCommand("curl -s https://example.com/Users/arya/a/b/c/d", HOME),
+  ).toBe("curl -s https://example.com/Users/arya/a/b/c/d");
+});
+
+test("shortens only the fields that hold a command or a path", async ($, on) => {
+  mock.env(on, { HOME });
+  const subject = async (tool: string, input: object) =>
+    lineOf(await mount($, "ToolUse", { ...BASH_ROW, tool, input }));
+
+  expect(
+    await subject("WebFetch", { url: "https://example.com/Users/arya/x" }),
+  ).toContain("(https://example.com/Users/arya/x)");
+  expect(await subject("Grep", { pattern: "cd src && build" })).toContain(
+    "(cd src && build)",
+  );
+  expect(
+    await subject("Read", { file_path: "/Users/arya/dev/a/b/c.md" }),
+  ).toContain("(…/b/c.md)");
 });
 
 // MARK: Detail pane

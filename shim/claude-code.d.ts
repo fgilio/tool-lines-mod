@@ -270,6 +270,9 @@ declare module "claude-code" {
       close: (pane: PaneCloseArgs) => Promise<void>;
       panes: () => Promise<readonly UiPane[]>;
     };
+    env: {
+      get: (name: string) => Promise<string | undefined>;
+    };
   }
 
   // MARK: Hooks
@@ -412,6 +415,10 @@ declare module "claude-code/testing" {
   export type TestBody = ($: Engine, on: On) => unknown;
 
   export const test: (name: string, body: TestBody) => void;
+
+  export const mock: {
+    env: (on: On, variables: Readonly<Record<string, string>>) => void;
+  };
 
   export type Matchers = {
     toBe: (expected: unknown) => void;
