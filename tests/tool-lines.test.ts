@@ -812,3 +812,44 @@ test("an interrupted call with no output has a red dot and says interrupted", as
   );
   expect(await lineOf(ui)).toMatch(/\) - interrupted$/);
 });
+
+// MARK: Review follow-ups
+
+test("a tool named like an Object member still shows its JSON", async ($, on) => {
+  const text = await paneFor($, on, {
+    tool: "toString",
+    input: {},
+    output: { answer: 42 },
+  });
+  expect(text).toContain('"answer": 42');
+});
+
+test("a carriage return overwrites only what the later text reaches", async ($, on) => {
+  const text = await paneFor($, on, {
+    output: {
+      stdout: "abcdef\rxy\ncomplete\r\nprogress 10%\rprogress 100%",
+      stderr: "",
+      interrupted: false,
+    },
+  });
+  expect(text).toContain("xycdef\ncomplete\nprogress 100%");
+});
+
+test("an errored call with a structured result and no text keeps the result", async ($, on) => {
+  fakePanes(on);
+  on("tool.call", () => ({ isError: true, result: { code: 7 } }));
+  const ui = await mount($, "ToolUse", {
+    ...runningRow("toolu_struct"),
+    tool: "mcp__acme__run",
+  });
+  await $.tool.call({ tool: "mcp__acme__run", tool_use_id: "toolu_struct" });
+  await ui.press({ key: "detail" });
+
+  expect(await paneText($)).toContain('"code": 7');
+});
+
+test("a Bash result with neither stream shows its JSON, not (no output)", async ($, on) => {
+  const text = await paneFor($, on, { output: { code: 7 } });
+  expect(text).toContain('"code": 7');
+  expect(text).not.toContain("(no output)");
+});

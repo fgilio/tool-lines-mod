@@ -98,6 +98,7 @@ const BASH_DETAILS: [key: string, label: string][] = [
 // of its output went to. A stream of another shape is not Bash's, so the result falls through.
 const bashOutput: OutputRenderer = (output) => {
   const { stdout, stderr } = output;
+  if (stdout === undefined && stderr === undefined) return undefined;
   if (stdout !== undefined && typeof stdout !== "string") return undefined;
   if (stderr !== undefined && typeof stderr !== "string") return undefined;
   const sections: Section[] = [];
@@ -184,15 +185,16 @@ const search: OutputRenderer = (output) => {
 };
 
 /** The built-in tools whose result shape the pane knows; any other tool shows its JSON. */
-const OUTPUT_RENDERERS: Partial<Record<string, OutputRenderer>> = {
-  Bash: bashOutput,
-  Edit: fileChange,
-  MultiEdit: fileChange,
-  Write: fileChange,
-  Read: fileRead,
-  Grep: search,
-  Glob: search,
-};
+// A Map, so a tool named like an Object member (`toString`) finds no renderer.
+const OUTPUT_RENDERERS = new Map<string, OutputRenderer>([
+  ["Bash", bashOutput],
+  ["Edit", fileChange],
+  ["MultiEdit", fileChange],
+  ["Write", fileChange],
+  ["Read", fileRead],
+  ["Grep", search],
+  ["Glob", search],
+]);
 
 export function outputSections(call: ToolFacts): Section[] {
   const { output } = call;
@@ -204,7 +206,9 @@ export function outputSections(call: ToolFacts): Section[] {
     ]);
   const fields = fieldsOf(output);
   const sections =
-    fields === undefined ? undefined : OUTPUT_RENDERERS[call.tool]?.(fields);
+    fields === undefined
+      ? undefined
+      : OUTPUT_RENDERERS.get(call.tool)?.(fields);
 
   return printable(
     sections ?? [
@@ -226,12 +230,28 @@ const ESCAPES =
 // oxlint-disable-next-line no-control-regex -- matching control characters is the point
 const CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 
+// A carriage return moves the cursor back to the line's start: later text overwrites what it
+// reaches, and what it does not reach stays, as on the terminal.
+function overwrite(line: string): string {
+  if (!line.includes("\r")) return line;
+  const cells: string[] = [];
+  let cursor = 0;
+  for (const part of line.split("\r")) {
+    for (const char of part) {
+      cells[cursor] = char;
+      cursor += 1;
+    }
+    cursor = 0;
+  }
+  return cells.join("");
+}
+
 export function printableSource(source: string): string {
   return source
     .replace(/\r\n/g, "\n")
     .replace(ESCAPES, "")
     .split("\n")
-    .map((line) => line.slice(line.lastIndexOf("\r") + 1))
+    .map(overwrite)
     .join("\n")
     .replace(CONTROLS, (control) => {
       const code = control.charCodeAt(0);

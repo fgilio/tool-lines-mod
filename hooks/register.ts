@@ -481,7 +481,8 @@ export const register: Register = (on) => {
       isRunning: false,
       isErrored,
       isInterrupted: isErrored && next.signal.aborted,
-      output: ran.deny ?? (ran.isError ? ran.text : ran.result),
+      // An error's text is what the model read; a structured error with none keeps its result.
+      output: ran.deny ?? (ran.isError ? (ran.text ?? ran.result) : ran.result),
     };
     remember(e.tool_use_id, facts);
     await update($, detail, (current) =>
