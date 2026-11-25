@@ -1,7 +1,7 @@
 // Named .spec.ts, not .test.ts: `claude plugin test .` loads every
 // *.test.ts in the mod as a mod test, and this file runs under `bun test`.
 import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { win32 } from "node:path";
 
 import {
   binaryPath,
@@ -48,18 +48,22 @@ describe("versionMismatch", () => {
 });
 
 describe("binaryPath", () => {
+  test("resolves a relative Windows path against the working directory", () => {
+    expect(binaryPath(".\\bin\\claude.exe", "C:\\work", win32)).toBe(
+      "C:\\work\\bin\\claude.exe",
+    );
+  });
+
+  test("leaves a bare Windows command name for PATH", () => {
+    expect(binaryPath("claude.exe", "C:\\work", win32)).toBe("claude.exe");
+  });
+
   test("resolves a relative path against the working directory", () => {
     expect(binaryPath("./bin/claude", "/work")).toBe("/work/bin/claude");
   });
 
   test("keeps an absolute path", () => {
     expect(binaryPath("/opt/claude", "/work")).toBe("/opt/claude");
-  });
-
-  test("resolves a Windows path, which separates with backslashes", () => {
-    expect(binaryPath(".\\bin\\claude.exe", "/work")).toBe(
-      resolve("/work", ".\\bin\\claude.exe"),
-    );
   });
 
   test("leaves a bare command name to PATH", () => {

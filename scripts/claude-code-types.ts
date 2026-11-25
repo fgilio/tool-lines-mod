@@ -17,7 +17,7 @@
 // version fails the run.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import path, { join } from "node:path";
 import { parseArgs } from "node:util";
 
 const ROOT = join(import.meta.dir, "..");
@@ -56,9 +56,13 @@ export function versionMismatch(
  * The binary to start from the temporary folder: a path resolved against
  * the working directory, or a bare command name left for PATH to find.
  */
-export function binaryPath(claude: string, cwd: string): string {
-  // A path names a folder with either separator: `.\bin\claude.exe` on Windows.
-  return /[/\\]/.test(claude) ? resolve(cwd, claude) : claude;
+export function binaryPath(
+  claude: string,
+  cwd: string,
+  paths: Pick<typeof path, "resolve"> = path,
+): string {
+  // A Windows path such as `.\bin\claude.exe` separates with `\`.
+  return /[\\/]/.test(claude) ? paths.resolve(cwd, claude) : claude;
 }
 
 /**
