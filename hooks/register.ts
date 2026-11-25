@@ -124,6 +124,8 @@ type MetaProbe = (
   result: Record<string, unknown> | undefined,
 ) => string | undefined;
 
+const SHELL_RESET = /(?:^|\n)Shell cwd was reset to [^\n]+\n?$/;
+
 const META_PROBES: MetaProbe[] = [
   (row) => {
     const status = statusOf(row);
@@ -133,15 +135,11 @@ const META_PROBES: MetaProbe[] = [
     result?.backgroundTaskId !== undefined ? "background" : undefined,
   (row, result) =>
     result?.timedOutAfterMs !== undefined ? "timed out" : undefined,
-  (row, result) => {
-    const printed = [result?.stdout, result?.stderr];
-    return printed.some(
-      (stream) =>
-        typeof stream === "string" && stream.includes("Shell cwd was reset"),
-    )
+  // The engine's own line, last on stderr: a file that quotes it is not a reset.
+  (row, result) =>
+    typeof result?.stderr === "string" && SHELL_RESET.test(result.stderr)
       ? "shell cwd was reset"
-      : undefined;
-  },
+      : undefined,
   (row, result) => {
     const note = result?.returnCodeInterpretation;
     return typeof note === "string" && note !== "" ? note : undefined;
@@ -152,9 +150,37 @@ const META_PROBES: MetaProbe[] = [
 
 type ToolLine = { subject: string; meta: string };
 
+// MARK: Cells
+
+// What the terminal draws as one character, so a cut never splits an emoji or an accent.
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+// East Asian wide and fullwidth characters, and emoji, take two terminal cells.
+const WIDE =
+  /^(?:\p{Extended_Pictographic}|[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}])/u;
+
+const cellsOf = (grapheme: string): number => (WIDE.test(grapheme) ? 2 : 1);
+
+/** The terminal cells `text` takes. */
+export function cellWidth(text: string): number {
+  let cells = 0;
+  for (const { segment } of graphemes.segment(text)) cells += cellsOf(segment);
+  return cells;
+}
+
+/** `text` cut to `room` cells, an ellipsis marking the cut. */
 function clip(text: string, room: number): string {
-  if (text.length <= room) return text;
-  return room <= 1 ? "…" : text.slice(0, room - 1) + "…";
+  if (cellWidth(text) <= room) return text;
+  if (room <= 1) return "…";
+  let kept = "";
+  let cells = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    const width = cellsOf(segment);
+    if (cells + width > room - 1) break;
+    kept += segment;
+    cells += width;
+  }
+  return kept + "…";
 }
 
 // The subject is the only part cut, so the tool name and meta always stay readable.
@@ -167,20 +193,34 @@ function lineFor(
   const width = Math.max(columns - GUTTER - 2, 20);
   const label = labelOf(row.tool);
   // The subject wraps in its own column, to the right of the label.
-  const column = Math.max(width - label.length, 20);
+  const column = Math.max(width - cellWidth(label), 20);
   const result = fieldsOf(row.output);
   const meta = META_PROBES.map((probe) => probe(row, result))
     .filter((note) => note !== undefined)
     .join(", ");
   const budget = Math.min(
-    Math.max(width, MIN_CHARS) - label.length,
+    Math.max(width, MIN_CHARS) - cellWidth(label),
     column * MAX_ROWS,
   );
-  const frame = "()".length + (meta === "" ? 0 : ` - ${meta}`.length);
+  const frame = "()".length + (meta === "" ? 0 : cellWidth(` - ${meta}`));
   return { subject: clip(subjectOf(row.input, home), budget - frame), meta };
 }
 
 const labelOf = (tool: string) => `tool_call: ${tool}`;
+
+// A hover scope is 1 to 64 characters and a call id has no bound, so a long id is cut to its
+// tail and a hash of the whole, which keeps two calls apart.
+const SCOPE_LIMIT = 64;
+
+function hoverScope(id: string): string {
+  const scope = `open-${id}`;
+  if (scope.length <= SCOPE_LIMIT) return scope;
+  let hash = 0x811c9dc5;
+  for (const char of id) {
+    hash = Math.imul(hash ^ (char.codePointAt(0) ?? 0), 0x01000193) >>> 0;
+  }
+  return `open-${id.slice(-40)}-${hash.toString(16)}`;
+}
 
 // MARK: Status
 
@@ -316,7 +356,7 @@ export const register: Register = (on) => {
     };
 
     // The dot and the label underline together under the pointer, to show they take the click.
-    const hover = { scope: `open-${row.id}`, underline: true } as const;
+    const hover = { scope: hoverScope(row.id), underline: true } as const;
 
     const { id: _id, ...facts } = row;
     // The pane shows this call: a redrawn row carries news the pane must draw too.

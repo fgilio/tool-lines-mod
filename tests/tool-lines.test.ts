@@ -707,3 +707,108 @@ test("terminal escapes and carriage returns never reach a Code element", async (
   expect(text).not.toContain("\u001b");
   expect(text).not.toContain("\r");
 });
+
+// MARK: Limits
+
+test("a long call id still draws its row, its hover scope within 64 characters", async ($) => {
+  const id = "toolu_" + "x".repeat(60);
+  const ui = await mount($, "ToolUse", { ...BASH_ROW, tool_use_id: id });
+  const scopes = buttonHovers(await ui.drawn()).map((hover) =>
+    typeof hover === "object" && hover !== null && "scope" in hover
+      ? String(hover.scope)
+      : "",
+  );
+  expect(scopes.length).toBe(2);
+  expect(scopes[0] === scopes[1] && (scopes[0] ?? "").length <= 64).toBe(true);
+});
+
+// Terminal cells of a line of ASCII and CJK ideographs: an ideograph takes two.
+const cells = (text: string) =>
+  text.length + (text.match(/[\u4e00-\u9fff]/gu) ?? []).length;
+
+test("cuts a wide-character subject by terminal cells, so the line fits", async ($) => {
+  const ui = await mount(
+    $,
+    "ToolUse",
+    {
+      ...BASH_ROW,
+      tool: "Read",
+      input: { file_path: "界".repeat(110) },
+      output: { type: "text" },
+    },
+    150,
+  );
+  const line = await lineOf(ui);
+  expect(cells(line) <= 150 - 4 - 2).toBe(true);
+  expect(line).toMatch(/…\)$/);
+});
+
+test("never cuts an emoji in half", async ($) => {
+  const lines = await Promise.all(
+    [60, 61, 150, 151].map(async (columns) =>
+      lineOf(
+        await mount(
+          $,
+          "ToolUse",
+          { ...BASH_ROW, input: { command: "echo " + "😀".repeat(200) } },
+          columns,
+        ),
+      ),
+    ),
+  );
+  // A lone surrogate, or the replacement character the drawing puts in its place.
+  const halves =
+    /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]|\ufffd/;
+  expect(lines.filter((line) => halves.test(line))).toEqual([]);
+});
+
+// MARK: Meta
+
+test("reports a shell reset only from the engine's own line at the end of stderr", async ($) => {
+  const ui = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    input: { command: "cat hooks/register.ts" },
+    output: {
+      stdout: '  stream.includes("Shell cwd was reset")',
+      stderr: "",
+      interrupted: false,
+    },
+  });
+  expect(await lineOf(ui)).toBe("tool_call: Bash(cat hooks/register.ts)");
+});
+
+// MARK: Surfaces
+
+test("leaves every row to the engine on a surface other than the terminal", async ($, on) => {
+  fakeEngine(on);
+  for (const surface of ["desktop", "vscode", "mobile"] as const) {
+    for (const [component, props] of [
+      ["ToolUse", BASH_ROW],
+      ["ToolResult", RESULT_PROPS],
+    ] as const) {
+      // oxlint-disable-next-line no-await-in-loop -- one surface at a time keeps the kit's order
+      const ui = await $.ui.mount({
+        plugin: "tool-lines",
+        surface,
+        component,
+        props,
+        viewport: { columns: 200, rows: 50 },
+      });
+      // oxlint-disable-next-line no-await-in-loop -- as above
+      expect(shown(await ui.drawn())).toBe("engine");
+    }
+  }
+});
+
+test("an interrupted call with no output has a red dot and says interrupted", async ($) => {
+  const ui = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    isErrored: false,
+    isInterrupted: true,
+    output: undefined,
+  });
+  expect((await ui.find({ type: "Text", text: "●" }))?.props.color).toBe(
+    "error",
+  );
+  expect(await lineOf(ui)).toMatch(/\) - interrupted$/);
+});
