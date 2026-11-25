@@ -220,6 +220,34 @@ test("leaves tool rows to the engine while ctrl+o is open", async ($, on) => {
   expect(await drawnBy("ToolUse", BASH_ROW)).toMatch(/^●tool_call: Bash/);
 });
 
+test("a result row that says it is expanded draws in full, with no prompt row seen", async ($, on) => {
+  fakeEngine(on);
+  // A fresh module, as after a hot reload: no composer prompt has drawn yet.
+  const result = await mount($, "ToolResult", {
+    ...RESULT_PROPS,
+    isExpanded: true,
+  });
+  expect(shown(await result.drawn())).toBe("engine");
+  // The view it reported reaches the tool rows too.
+  expect(shown(await (await mount($, "ToolUse", BASH_ROW)).drawn())).toBe(
+    "engine",
+  );
+});
+
+test("a group row the engine draws expanded reports the expanded view", async ($, on) => {
+  fakeEngine(on);
+  await $.ui.mount({
+    plugin: "tool-lines",
+    surface: "terminal",
+    component: "ToolGroup",
+    props: { calls: [], isActive: false, isExpanded: true },
+    viewport: { columns: 200, rows: 50 },
+  });
+  expect(shown(await (await mount($, "ToolUse", BASH_ROW)).drawn())).toBe(
+    "engine",
+  );
+});
+
 // MARK: ToolGroup
 
 test("unfolds a group of reads and searches into one row per call", async ($, on) => {

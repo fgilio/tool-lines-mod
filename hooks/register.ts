@@ -1,5 +1,5 @@
 import { atom, read, update } from "claude-code";
-import type { Register } from "claude-code";
+import type { EngineInterface, Register } from "claude-code";
 
 import type { ToolDetail, ToolFacts } from "../types";
 import {
@@ -146,12 +146,21 @@ const noteStyle = (isError: boolean) =>
 
 // MARK: View
 
-// Tool rows don't say whether the ctrl+o transcript (or --verbose) is open, but the person's own
-// prompt rows do; their flag is mirrored here so every tool site leaves that view to the engine.
+// A tool row's own flag can't tell the ctrl+o transcript (or --verbose) from a group this mod
+// unfolded, but the person's prompt rows, result rows and the engine's group rows say which view
+// is open. The last one heard is mirrored here so every tool site leaves that view to the engine.
+// A module variable, so a hot reload forgets it until one of those rows draws again.
 let isExpandedView = false;
 
 function isCompact(surface: string): boolean {
   return surface === "terminal" && !isExpandedView;
+}
+
+// Tool rows keep their last answer until asked again, so a switch of view redraws them.
+function noteView($: EngineInterface, isExpanded: boolean | undefined): void {
+  if (isExpanded === undefined || isExpanded === isExpandedView) return;
+  isExpandedView = isExpanded;
+  $.ui.invalidate("ui.render");
 }
 
 // MARK: Detail pane
@@ -166,11 +175,7 @@ export const register: Register = (on) => {
     "ui.render",
     { component: "UserMessage", props: { origin: { kind: "composer" } } },
     async ($, e, next) => {
-      if (e.surface === "terminal" && e.props.isExpanded !== isExpandedView) {
-        isExpandedView = e.props.isExpanded;
-        // Tool rows keep their last answer until asked again, so the switch has to redraw them.
-        $.ui.invalidate("ui.render");
-      }
+      if (e.surface === "terminal") noteView($, e.props.isExpanded);
       if (!isCompact(e.surface)) return next(e);
       const { Box } = $.ui.resolve(e);
       return Box({
@@ -271,12 +276,15 @@ export const register: Register = (on) => {
 
   // Unfolding hands each grouped read or search to the ToolUse hook, so it flows like every other call.
   on("ui.render", { component: "ToolGroup" }, async ($, e, next) => {
+    // The engine's own flag, before this hook unfolds the group: true only in an expanded view.
+    if (e.surface === "terminal") noteView($, e.props.isExpanded);
     if (!isCompact(e.surface)) return next(e);
     return next({ ...e, props: { ...e.props, isExpanded: true } });
   });
 
   // The compact line already carries what the result block would say.
   on("ui.render", { component: "ToolResult" }, async ($, e, next) => {
+    if (e.surface === "terminal") noteView($, e.props.isExpanded);
     if (!isCompact(e.surface)) return next(e);
     const { Box } = $.ui.resolve(e);
     return Box({});
