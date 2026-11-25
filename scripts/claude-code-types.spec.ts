@@ -1,8 +1,14 @@
 // Named .spec.ts, not .test.ts: `claude plugin test .` loads every
 // *.test.ts in the mod as a mod test, and this file runs under `bun test`.
 import { describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 
-import { binaryPath, versionMismatch, versionOf } from "./claude-code-types";
+import {
+  binaryPath,
+  generate,
+  versionMismatch,
+  versionOf,
+} from "./claude-code-types";
 
 const HEADER = "// Written by Claude Code 2.1.302.\n// Claude Code ...\n";
 
@@ -50,7 +56,25 @@ describe("binaryPath", () => {
     expect(binaryPath("/opt/claude", "/work")).toBe("/opt/claude");
   });
 
+  test("resolves a Windows path, which separates with backslashes", () => {
+    expect(binaryPath(".\\bin\\claude.exe", "/work")).toBe(
+      resolve("/work", ".\\bin\\claude.exe"),
+    );
+  });
+
   test("leaves a bare command name to PATH", () => {
     expect(binaryPath("claude", "/work")).toBe("claude");
+  });
+});
+
+describe("generate", () => {
+  test("reports how Claude Code exited when it wrote nothing", async () => {
+    // `false` exits 1 at once, before any temporary folder exists.
+    const failure = await generate(
+      Bun.which("false") ?? "/usr/bin/false",
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain("exited with code 1");
   });
 });

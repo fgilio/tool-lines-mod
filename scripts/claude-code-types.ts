@@ -57,14 +57,15 @@ export function versionMismatch(
  * the working directory, or a bare command name left for PATH to find.
  */
 export function binaryPath(claude: string, cwd: string): string {
-  return claude.includes("/") ? resolve(cwd, claude) : claude;
+  // A path names a folder with either separator: `.\bin\claude.exe` on Windows.
+  return /[/\\]/.test(claude) ? resolve(cwd, claude) : claude;
 }
 
 /**
  * Loads the plugin-authoring skill in a throwaway session and returns the
  * declarations the engine wrote for it.
  */
-async function generate(claude: string): Promise<string> {
+export async function generate(claude: string): Promise<string> {
   const scratch = await mkdtemp(join(tmpdir(), "claude-code-types-"));
 
   try {
@@ -84,21 +85,28 @@ async function generate(claude: string): Promise<string> {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [stdout, stderr] = await Promise.all([
+    const [stdout, stderr, exitCode] = await Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
       child.exited,
     ]);
+    // A binary that stops before the skill loads leaves no temporary folder: no file written.
     const written = await Array.fromAsync(
       new Bun.Glob(`**/${GENERATED_FILE}`).scan({
         cwd: join(scratch, "tmp"),
         dot: true,
       }),
-    );
+    ).catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return [];
+      throw error;
+    });
 
+    // The logged-out session exits non-zero after writing the file, so only the count decides.
     if (written.length !== 1) {
       throw new Error(
         `Expected Claude Code to write one ${GENERATED_FILE}, found ${written.length}. ` +
+          `${claude} exited with code ${exitCode}. ` +
           `Its output: ${(stdout + stderr).trim() || "(none)"}`,
       );
     }
