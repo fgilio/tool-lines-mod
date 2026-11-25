@@ -84,7 +84,21 @@ function fakePanes(on: TestOn): Set<string> {
     open.delete(e.id);
     return { value: undefined };
   });
+  answerPanes(on, open);
   return open;
+}
+
+// Answers `$.ui.panes()` from a set of open pane ids, as the engine's record does.
+function answerPanes(on: TestOn, open: ReadonlySet<string>) {
+  on("ui.panes", () => ({
+    value: [...open].map((id) => ({
+      id,
+      title: id,
+      isShown: true,
+      isFocused: false,
+      isPlaced: true,
+    })),
+  }));
 }
 
 // Nested Text children read as one line, the way the terminal paints them.
@@ -439,4 +453,116 @@ test("shows an edit as a diff and a read as numbered file lines", async ($, on) 
   });
   await readCall.press({ key: "detail" });
   expect(await paneText($)).toContain("hello");
+});
+
+// MARK: Pane state
+
+const runningRow = (id: string): Row => ({
+  ...BASH_ROW,
+  tool_use_id: id,
+  isRunning: true,
+  output: undefined,
+});
+
+test("a call that finished before the click shows its result, not running", async ($, on) => {
+  fakePanes(on);
+  on("tool.call", () => ({
+    result: { stdout: "finished", stderr: "", interrupted: false },
+  }));
+  // The row still carries its running snapshot: the terminal has not redrawn it.
+  const ui = await mount($, "ToolUse", runningRow("toolu_done"));
+  await $.tool.call({ tool: "Bash", command: "ls", tool_use_id: "toolu_done" });
+  await ui.press({ key: "detail" });
+
+  const text = await paneText($);
+  expect(text).toContain("finished");
+  expect(text).not.toContain("running");
+});
+
+test("an open call the row redraws as interrupted reads interrupted in the pane", async ($, on) => {
+  fakePanes(on);
+  await (
+    await mount($, "ToolUse", runningRow("toolu_cut"))
+  ).press({
+    key: "detail",
+  });
+  await mount($, "ToolUse", {
+    ...runningRow("toolu_cut"),
+    isRunning: false,
+    isErrored: true,
+    isInterrupted: true,
+    output: "Interrupted by user",
+  });
+
+  const text = await paneText($);
+  expect(text).toContain("interrupted");
+  expect(text).not.toContain("· error");
+});
+
+test("a click on another line while the pane closes leaves that line's call open", async ($, on) => {
+  const open = new Set<string>();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  on("ui.open", (_$, e) => {
+    open.add(e.id);
+    return { value: { isPlaced: true } };
+  });
+  on("ui.close", async (_$, e) => {
+    await gate;
+    open.delete(e.id);
+    return { value: undefined };
+  });
+  answerPanes(on, open);
+  const a = await mount($, "ToolUse", { ...BASH_ROW, tool_use_id: "toolu_a" });
+  const b = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    tool_use_id: "toolu_b",
+    input: { command: "echo second" },
+  });
+  await a.press({ key: "detail" });
+
+  const closing = a.press({ key: "detail" });
+  const opening = b.press({ key: "detail" });
+  release?.();
+  await Promise.all([closing, opening]);
+
+  expect(open.has("tool-detail")).toBe(true);
+  expect(await paneText($)).toContain("echo second");
+});
+
+test("a click after a refused open tries to open the pane again", async ($, on) => {
+  const open = new Set<string>();
+  let refusals = 1;
+  on("ui.open", (_$, e) => {
+    if (refusals > 0) {
+      refusals -= 1;
+      return { deny: "not now" };
+    }
+    open.add(e.id);
+    return { value: { isPlaced: true } };
+  });
+  on("ui.close", (_$, e) => {
+    open.delete(e.id);
+    return { value: undefined };
+  });
+  answerPanes(on, open);
+  const ui = await mount($, "ToolUse", BASH_ROW);
+  await ui.press({ key: "detail" }).catch(() => undefined);
+  expect(open.has("tool-detail")).toBe(false);
+
+  await ui.press({ key: "detail" });
+  expect(open.has("tool-detail")).toBe(true);
+});
+
+test("a refused close keeps the pane's call", async ($, on) => {
+  on("ui.open", () => ({ value: { isPlaced: true } }));
+  on("ui.close", () => ({ deny: "kept open" }));
+  answerPanes(on, new Set(["tool-detail"]));
+  const ui = await mount($, "ToolUse", BASH_ROW);
+  await ui.press({ key: "detail" });
+  await ui.press({ key: "detail" }).catch(() => undefined);
+
+  expect(await paneText($)).toContain("needle");
 });

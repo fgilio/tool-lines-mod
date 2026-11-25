@@ -168,6 +168,55 @@ function noteView($: EngineInterface, isExpanded: boolean | undefined): void {
 const PANE = "tool-detail";
 const detail = atom({ plugin: "tool-lines", key: "detail" } as const, null);
 
+// The newest facts heard for each call, from its row's drawings and its completion, so a click
+// on a row the terminal has not redrawn yet, and an open pane, show where the call stands now.
+// A module variable: after a hot reload the rows' next drawings fill it again.
+const latest = new Map<string, Partial<ToolFacts>>();
+const LATEST_LIMIT = 500;
+
+/** Records facts for a call; true when they changed what was known. */
+function remember(id: string, facts: Partial<ToolFacts>): boolean {
+  const known = latest.get(id);
+  const before: Record<string, unknown> = { ...known };
+  const isChanged =
+    known === undefined ||
+    Object.entries(facts).some(([key, value]) => before[key] !== value);
+  latest.delete(id);
+  latest.set(id, { ...known, ...facts });
+  if (latest.size > LATEST_LIMIT) {
+    const oldest = latest.keys().next();
+    if (oldest.done !== true) latest.delete(oldest.value);
+  }
+  return isChanged;
+}
+
+const newest = (call: ToolDetail): ToolDetail => ({
+  ...call,
+  ...latest.get(call.id),
+});
+
+// The call the pane shows, mirrored from the atom so a row's drawing can tell whether its news
+// reaches the pane without subscribing every row to the selection.
+let shownId: string | null = null;
+
+// Opens and closes run one after another, so a close still settling never undoes a newer open.
+let transitions: Promise<unknown> = Promise.resolve();
+
+function serially(work: () => Promise<void>): Promise<void> {
+  const run = transitions.then(work, work);
+  transitions = run.catch(() => undefined);
+  return run;
+}
+
+/** Whether the engine has the pane open: its record, not the module's; undefined if unknown. */
+async function isPaneOpen($: EngineInterface): Promise<boolean | undefined> {
+  try {
+    return (await $.ui.panes()).some((pane) => pane.id === PANE);
+  } catch {
+    return undefined;
+  }
+}
+
 // MARK: Hooks
 
 export const register: Register = (on) => {
@@ -203,17 +252,36 @@ export const register: Register = (on) => {
     // The dot and the label underline together under the pointer, to show they take the click.
     const hover = { scope: `open-${row.id}`, underline: true } as const;
 
-    // A click on the call the pane already shows closes it.
-    const toggleDetail = async () => {
-      const shown = await update($, detail, (current) =>
-        current?.id === row.id ? null : row,
-      );
-      if (shown === null) {
-        await $.ui.close({ id: PANE });
-        return;
-      }
-      await $.ui.open({ id: PANE, title: `${row.tool} call` });
-    };
+    const { id: _id, ...facts } = row;
+    // The pane shows this call: a redrawn row carries news the pane must draw too.
+    if (remember(row.id, facts) && row.id === shownId) {
+      $.ui.invalidate("ui.render");
+    }
+
+    // A click on the call the open pane shows closes it; any other click opens this call.
+    const toggleDetail = () =>
+      serially(async () => {
+        const current = await read($, detail);
+        if (current?.id === row.id && (await isPaneOpen($)) !== false) {
+          // The ui.close hook clears the selection once the pane is gone.
+          await $.ui.close({ id: PANE });
+          return;
+        }
+        await update($, detail, () => newest(row));
+        shownId = row.id;
+        try {
+          await $.ui.open({ id: PANE, title: `${row.tool} call` });
+        } catch (error) {
+          // Refused: forget the selection, so the next click opens the pane again.
+          if ((await isPaneOpen($)) !== true) {
+            await update($, detail, (shown) =>
+              shown?.id === row.id ? null : shown,
+            );
+            shownId = null;
+          }
+          throw error;
+        }
+      });
 
     return Box({
       flexDirection: "row",
@@ -290,30 +358,44 @@ export const register: Register = (on) => {
     return Box({});
   });
 
-  // A call opened while it ran gets its result once it lands.
+  // Every call's result is kept as it lands, so a click on a row drawn before it shows it, and
+  // a call opened while it ran gets it in the pane.
   on("tool.call", async ($, e, next) => {
     const ran = await next(e);
-    const shown = await read($, detail);
-    if (shown?.id !== e.tool_use_id) return ran;
     const isErrored = ran.deny !== undefined || ran.isError === true;
-    const output = ran.deny ?? (ran.isError ? ran.text : ran.result);
+    // An abort reaches the call's chain as its signal: the row will read interrupted.
+    const facts = {
+      isRunning: false,
+      isErrored,
+      isInterrupted: isErrored && next.signal.aborted,
+      output: ran.deny ?? (ran.isError ? ran.text : ran.result),
+    };
+    remember(e.tool_use_id, facts);
     await update($, detail, (current) =>
-      current?.id === e.tool_use_id
-        ? { ...current, isRunning: false, isErrored, output }
-        : current,
+      current?.id === e.tool_use_id ? { ...current, ...facts } : current,
     );
     return ran;
   }).catch(($, e, next) => next(e)); // The pane is a view: a failure here never touches the call.
 
-  // Closed by a click, its close mark or Esc, the next click on the same line opens it again.
+  // Closed by a click, its close mark or Esc, the next click on the same line opens it again. A
+  // refused close keeps the pane, and with it the call it shows.
   on("ui.close", { id: PANE }, async ($, e, next) => {
-    await update($, detail, () => null);
-    return next(e);
+    const closing = await read($, detail);
+    const closed = await next(e);
+    if (closed.deny === undefined) {
+      await update($, detail, (current) =>
+        current?.id === closing?.id ? null : current,
+      );
+      if (shownId === closing?.id) shownId = null;
+    }
+    return closed;
   }).catch(($, e, next) => next(e)); // A failed clear never keeps the pane open.
 
   on("ui.render", { component: "Pane", requestId: PANE }, async ($, e) => {
     const { Box, Text, Code } = $.ui.resolve(e);
-    const shown = await read($, detail);
+    const selected = await read($, detail);
+    shownId = selected?.id ?? null;
+    const shown = selected === null ? null : newest(selected);
     if (shown === null)
       return Text({
         dimColor: true,

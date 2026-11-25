@@ -243,6 +243,14 @@ declare module "claude-code" {
     origin: { kind: "plugin" | "person" | "unload" };
   };
 
+  export type UiPane = {
+    id: string;
+    title: string;
+    isShown: boolean;
+    isFocused: boolean;
+    isPlaced: boolean;
+  };
+
   export type UiOpenResult =
     | { isPlaced: true }
     | { isPlaced: false; reason: string };
@@ -260,6 +268,7 @@ declare module "claude-code" {
       resolve: (e: { surface: RenderSurface }) => ElementTable;
       open: (pane: PaneOpenArgs) => Promise<UiOpenResult>;
       close: (pane: PaneCloseArgs) => Promise<void>;
+      panes: () => Promise<readonly UiPane[]>;
     };
   }
 
@@ -270,6 +279,7 @@ declare module "claude-code" {
     "tool.call": ToolCallInput;
     "ui.open": PaneOpenArgs;
     "ui.close": PaneCloseInput;
+    "ui.panes": Record<string, never>;
   };
 
   export type ResultOf = {
@@ -277,6 +287,7 @@ declare module "claude-code" {
     "tool.call": ToolCallResult;
     "ui.open": ValueOrDeny<UiOpenResult>;
     "ui.close": ValueOrDeny<void>;
+    "ui.panes": ValueOrDeny<readonly UiPane[]>;
   };
 
   export type EventName = keyof EventOf;
@@ -342,6 +353,7 @@ declare module "claude-code/testing" {
     RenderPropsOf,
     RenderSurface,
     RenderViewport,
+    ToolCallResult,
   } from "claude-code";
 
   export type FoundElement = {
@@ -385,6 +397,11 @@ declare module "claude-code/testing" {
   };
 
   export type Engine = {
+    tool: {
+      call: (
+        input: { tool: string; tool_use_id?: string } & Record<string, unknown>,
+      ) => Promise<ToolCallResult>;
+    };
     ui: {
       mount: <P extends RenderSurface, C extends RenderComponent>(
         target: MountTarget<P, C>,
