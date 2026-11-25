@@ -247,10 +247,10 @@ test("leaves tool rows to the engine while ctrl+o is open", async ($, on) => {
 test("a result row that says it is expanded draws in full, with no prompt row seen", async ($, on) => {
   fakeEngine(on);
   // A fresh module, as after a hot reload: no composer prompt has drawn yet.
-  const result = await mount($, "ToolResult", {
-    ...RESULT_PROPS,
-    isExpanded: true,
-  });
+  // Spread from a constant: Claude Code 2.1.302, which CI pins, types no isExpanded on a
+  // result row, and later releases send it.
+  const expanded = { isExpanded: true };
+  const result = await mount($, "ToolResult", { ...RESULT_PROPS, ...expanded });
   expect(shown(await result.drawn())).toBe("engine");
   // The view it reported reaches the tool rows too.
   expect(shown(await (await mount($, "ToolUse", BASH_ROW)).drawn())).toBe(

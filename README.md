@@ -13,8 +13,8 @@ Forked from the `tool-lines` mod in [Tickloop/claude-mods](https://github.com/Ti
 ## What it does
 
 - **One line per call**: `tool_call: Tool(subject) - meta`. The dot is yellow while the call runs, green when it is done, and red when it fails.
-- **Readable subjects**: the line drops shell setup (`T=/path;`, `cd dir &&`, `set -e;`), writes your home folder as `~`, and keeps the last two segments of a long path. The subject uses the whole row.
-- **Detail pane**: click the dot or `tool_call: Tool` to open the call's full input and result in a side pane. Both underline under the pointer. A click on the subject does nothing, so a misclick on the line leaves the pane closed. Bash shows the command, stdout and stderr. Edit and Write show a diff. Read shows the numbered file lines. Other tools show their JSON. Click the same dot or name again to close the pane.
+- **Readable subjects**: a command drops its shell setup (`T=/path;`, `cd dir &&`, `set -e;`). A command or a path writes your home folder (`$HOME`) as `~` and keeps the last two segments of a long path. A URL, a search pattern or a prompt stays as written. The subject uses the whole row and is cut by terminal cells, so wide characters and emoji fit.
+- **Detail pane**: click the dot or `tool_call: Tool` to open the call's full input and result in a side pane. Both underline under the pointer. A click on the subject does nothing, so a misclick on the line leaves the pane closed. Bash shows the command, stdout and stderr, and the background task or saved file its output went to. Edit and Write show a diff, or the content, and a staged write reads as held for review. Read shows the numbered file lines. Other tools show their JSON. Terminal colors and progress lines are drawn as the terminal shows them. Click the same dot or name again to close the pane.
 - **ctrl+o**: the expanded transcript stays as the engine draws it.
 
 Clicks reach the mod in the fullscreen terminal.

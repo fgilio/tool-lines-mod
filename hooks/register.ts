@@ -248,6 +248,13 @@ function isCompact(surface: string): boolean {
   return surface === "terminal" && !isExpandedView;
 }
 
+// A result row's own flag, which Claude Code 2.1.302 does not send yet: undefined there.
+function expandedFlag(props: object): boolean | undefined {
+  return "isExpanded" in props && typeof props.isExpanded === "boolean"
+    ? props.isExpanded
+    : undefined;
+}
+
 // Tool rows keep their last answer until asked again, so a switch of view redraws them.
 function noteView($: EngineInterface, isExpanded: boolean | undefined): void {
   if (isExpanded === undefined || isExpanded === isExpandedView) return;
@@ -458,7 +465,7 @@ export const register: Register = (on) => {
 
   // The compact line already carries what the result block would say.
   on("ui.render", { component: "ToolResult" }, async ($, e, next) => {
-    if (e.surface === "terminal") noteView($, e.props.isExpanded);
+    if (e.surface === "terminal") noteView($, expandedFlag(e.props));
     if (!isCompact(e.surface)) return next(e);
     const { Box } = $.ui.resolve(e);
     return Box({});
