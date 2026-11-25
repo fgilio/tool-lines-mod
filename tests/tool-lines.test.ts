@@ -626,3 +626,84 @@ test("a refused close keeps the pane's call", async ($, on) => {
 
   expect(await paneText($)).toContain("needle");
 });
+
+// MARK: Pane renderers
+
+async function paneFor($: TestDollar, on: TestOn, row: Partial<Row>) {
+  fakePanes(on);
+  await (
+    await mount($, "ToolUse", { ...BASH_ROW, tool_use_id: "toolu_r", ...row })
+  ).press({ key: "detail" });
+  return paneText($);
+}
+
+test("a tool that is not Bash shows its whole result, stdout or not", async ($, on) => {
+  const text = await paneFor($, on, {
+    tool: "mcp__acme__ask",
+    input: { question: "x" },
+    output: { stdout: "ok", answer: 42 },
+  });
+  expect(text).toContain('"answer": 42');
+});
+
+test("a write that updated a file with no diff shows its content, not matches", async ($, on) => {
+  const text = await paneFor($, on, {
+    tool: "Write",
+    input: { file_path: "/a.md", content: "new" },
+    output: {
+      type: "update",
+      filePath: "/a.md",
+      content: "new",
+      structuredPatch: [],
+      originalFile: null,
+    },
+  });
+  expect(text).not.toContain("Matches");
+  expect(text).toContain("Content");
+  expect(text).toContain("new");
+});
+
+test("a staged write reads as held for review, not as written", async ($, on) => {
+  const text = await paneFor($, on, {
+    tool: "Write",
+    input: { file_path: "/a.md", content: "new" },
+    output: {
+      type: "create",
+      filePath: "/a.md",
+      content: "new",
+      structuredPatch: [],
+      originalFile: null,
+      staged: true,
+    },
+  });
+  expect(text).not.toContain("Created");
+  expect(text).toContain("the file is unchanged");
+});
+
+test("a background or saved Bash result names its task and its saved output", async ($, on) => {
+  const text = await paneFor($, on, {
+    output: {
+      stdout: "",
+      stderr: "",
+      interrupted: false,
+      backgroundTaskId: "b1",
+      persistedOutputPath: "/tmp/out.txt",
+    },
+  });
+  expect(text).toContain("b1");
+  expect(text).toContain("/tmp/out.txt");
+  expect(text).not.toContain("(no output)");
+});
+
+test("terminal escapes and carriage returns never reach a Code element", async ($, on) => {
+  const text = await paneFor($, on, {
+    output: {
+      stdout: "\u001b[31mfailed\u001b[0m\nprogress 10%\rprogress 100%\u0007",
+      stderr: "",
+      interrupted: false,
+    },
+  });
+  expect(text).toContain("failed\nprogress 100%␇");
+  expect(text).not.toContain("\u001b");
+  expect(text).not.toContain("\r");
+});
