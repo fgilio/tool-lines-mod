@@ -1,5 +1,5 @@
 import { atom, read, update } from "claude-code";
-import type { Register } from "claude-code";
+import type { EngineInterface, Register } from "claude-code";
 
 import type { ToolDetail, ToolFacts } from "../types";
 import {
@@ -38,23 +38,69 @@ const SUBJECT_KEYS = [
 ];
 
 // Setup the reader skips to find the command that does the work: `T=/long/path;` and `cd dir &&`.
+// A word stops at a shell operator, so `cd site;pwd` drops `cd site;` alone.
 const SHELL_SETUP =
-  /^(?:(?:[A-Za-z_]\w*=\S*|cd\s+\S+|set\s+-\w+)\s*(?:;|&&)\s*)+/;
-const HOME = /(?:\/Users|\/home)\/[^/\s'"]+/g;
+  /^(?:(?:[A-Za-z_]\w*=[^\s;&|<>]*|cd\s+[^\s;&|<>]+|set\s+[-+]\w+)\s*(?:;|&&)\s*)+/;
+// What a path segment holds: anything but a separator, a quote or a shell operator.
+const SEGMENT = String.raw`[^/\s'"\x60;&|<>()]+`;
 // A path past three segments keeps its last two: the folder and the file are what tell it apart.
-const LONG_PATH = /(?<![\w:/.~])(?:~|\.{0,2})?(?:\/[^/\s'"]+){3,}/g;
+const LONG_PATH = new RegExp(
+  String.raw`(?<![\w:/.~])(?:~|\.{0,2})?(?:/${SEGMENT}){3,}`,
+  "g",
+);
+// A URL keeps every character: its path is the server's, not a file here.
+const URL_TOKEN = /[A-Za-z][\w+.-]*:\/\/[^\s'"\x60<>]+/g;
 
-export function shortenSubject(subject: string): string {
-  return subject
-    .replace(SHELL_SETUP, "")
-    .replace(HOME, "~")
-    .replace(LONG_PATH, (path) => "…/" + path.split("/").slice(-2).join("/"));
+const escapeRegExp = (text: string) =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Paths in `text` with the current home as `~` and long ones cut to their last two segments. */
+export function shortenPaths(text: string, home: string | undefined): string {
+  const pieces = text.split(URL_TOKEN);
+  const urls = text.match(URL_TOKEN) ?? [];
+  // The home folder alone, at a path boundary: `/home/alice2` is not `/home/alice`.
+  const homePath =
+    home === undefined || home === "" || home === "/"
+      ? undefined
+      : new RegExp(
+          String.raw`(?<![\w:/.~-])${escapeRegExp(home.replace(/\/+$/, ""))}(?=/|$|[\s'"\x60;&|<>()])`,
+          "g",
+        );
+  return pieces
+    .map((piece, index) => {
+      const shortened = (
+        homePath === undefined ? piece : piece.replace(homePath, "~")
+      ).replace(
+        LONG_PATH,
+        (path) => "…/" + path.split("/").slice(-2).join("/"),
+      );
+      return shortened + (urls[index] ?? "");
+    })
+    .join("");
 }
+
+/** A shell command from the command that does the work, its paths shortened. */
+export function shortenCommand(
+  command: string,
+  home: string | undefined,
+): string {
+  const work = command.replace(SHELL_SETUP, "");
+  return shortenPaths(work === "" ? command : work, home);
+}
+
+// How each subject field reads on the line: a command and a path shorten; a URL, a pattern, a
+// query or a prompt is the person's own text and stays as written.
+const SHORTEN_BY_KEY: Record<string, typeof shortenPaths> = {
+  command: shortenCommand,
+  file_path: shortenPaths,
+  notebook_path: shortenPaths,
+  path: shortenPaths,
+};
 
 // This extracts the main argument of a tool call. Tools with no known key fall back to their raw
 // JSON so the line is never blank, and whitespace is collapsed so a multi-line command can't break
 // the line apart.
-function subjectOf(input: unknown): string {
+function subjectOf(input: unknown, home: string | undefined): string {
   const fields = fieldsOf(input);
   if (fields === undefined) return "";
   const key = SUBJECT_KEYS.find(
@@ -66,7 +112,9 @@ function subjectOf(input: unknown): string {
       : Object.keys(fields).length > 0
         ? JSON.stringify(fields)
         : "";
-  return shortenSubject(raw.replace(/\s+/g, " ").trim());
+  const subject = raw.replace(/\s+/g, " ").trim();
+  const shorten = key === undefined ? undefined : SHORTEN_BY_KEY[key];
+  return shorten === undefined ? subject : shorten(subject, home);
 }
 
 // Each probe surfaces one fact the hidden result block would have shown; add one here to extend the meta.
@@ -75,6 +123,8 @@ type MetaProbe = (
   row: ToolFacts,
   result: Record<string, unknown> | undefined,
 ) => string | undefined;
+
+const SHELL_RESET = /(?:^|\n)Shell cwd was reset to [^\n]+\n?$/;
 
 const META_PROBES: MetaProbe[] = [
   (row) => {
@@ -85,15 +135,11 @@ const META_PROBES: MetaProbe[] = [
     result?.backgroundTaskId !== undefined ? "background" : undefined,
   (row, result) =>
     result?.timedOutAfterMs !== undefined ? "timed out" : undefined,
-  (row, result) => {
-    const printed = [result?.stdout, result?.stderr];
-    return printed.some(
-      (stream) =>
-        typeof stream === "string" && stream.includes("Shell cwd was reset"),
-    )
+  // The engine's own line, last on stderr: a file that quotes it is not a reset.
+  (row, result) =>
+    typeof result?.stderr === "string" && SHELL_RESET.test(result.stderr)
       ? "shell cwd was reset"
-      : undefined;
-  },
+      : undefined,
   (row, result) => {
     const note = result?.returnCodeInterpretation;
     return typeof note === "string" && note !== "" ? note : undefined;
@@ -104,31 +150,77 @@ const META_PROBES: MetaProbe[] = [
 
 type ToolLine = { subject: string; meta: string };
 
+// MARK: Cells
+
+// What the terminal draws as one character, so a cut never splits an emoji or an accent.
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+// East Asian wide and fullwidth characters, and emoji, take two terminal cells.
+const WIDE =
+  /^(?:\p{Extended_Pictographic}|[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}])/u;
+
+const cellsOf = (grapheme: string): number => (WIDE.test(grapheme) ? 2 : 1);
+
+/** The terminal cells `text` takes. */
+export function cellWidth(text: string): number {
+  let cells = 0;
+  for (const { segment } of graphemes.segment(text)) cells += cellsOf(segment);
+  return cells;
+}
+
+/** `text` cut to `room` cells, an ellipsis marking the cut. */
 function clip(text: string, room: number): string {
-  if (text.length <= room) return text;
-  return room <= 1 ? "…" : text.slice(0, room - 1) + "…";
+  if (cellWidth(text) <= room) return text;
+  if (room <= 1) return "…";
+  let kept = "";
+  let cells = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    const width = cellsOf(segment);
+    if (cells + width > room - 1) break;
+    kept += segment;
+    cells += width;
+  }
+  return kept + "…";
 }
 
 // The subject is the only part cut, so the tool name and meta always stay readable.
-function lineFor(row: ToolFacts, columns: number): ToolLine {
+function lineFor(
+  row: ToolFacts,
+  columns: number,
+  home: string | undefined,
+): ToolLine {
   // 2 is the dot's column, which the summary text sits beside.
   const width = Math.max(columns - GUTTER - 2, 20);
   const label = labelOf(row.tool);
   // The subject wraps in its own column, to the right of the label.
-  const column = Math.max(width - label.length, 20);
+  const column = Math.max(width - cellWidth(label), 20);
   const result = fieldsOf(row.output);
   const meta = META_PROBES.map((probe) => probe(row, result))
     .filter((note) => note !== undefined)
     .join(", ");
   const budget = Math.min(
-    Math.max(width, MIN_CHARS) - label.length,
+    Math.max(width, MIN_CHARS) - cellWidth(label),
     column * MAX_ROWS,
   );
-  const frame = "()".length + (meta === "" ? 0 : ` - ${meta}`.length);
-  return { subject: clip(subjectOf(row.input), budget - frame), meta };
+  const frame = "()".length + (meta === "" ? 0 : cellWidth(` - ${meta}`));
+  return { subject: clip(subjectOf(row.input, home), budget - frame), meta };
 }
 
 const labelOf = (tool: string) => `tool_call: ${tool}`;
+
+// A hover scope is 1 to 64 characters and a call id has no bound, so a long id is cut to its
+// tail and a hash of the whole, which keeps two calls apart.
+const SCOPE_LIMIT = 64;
+
+function hoverScope(id: string): string {
+  const scope = `open-${id}`;
+  if (scope.length <= SCOPE_LIMIT) return scope;
+  let hash = 0x811c9dc5;
+  for (const char of id) {
+    hash = Math.imul(hash ^ (char.codePointAt(0) ?? 0), 0x01000193) >>> 0;
+  }
+  return `open-${id.slice(-40)}-${hash.toString(16)}`;
+}
 
 // MARK: Status
 
@@ -146,18 +238,93 @@ const noteStyle = (isError: boolean) =>
 
 // MARK: View
 
-// Tool rows don't say whether the ctrl+o transcript (or --verbose) is open, but the person's own
-// prompt rows do; their flag is mirrored here so every tool site leaves that view to the engine.
+// A tool row's own flag can't tell the ctrl+o transcript (or --verbose) from a group this mod
+// unfolded, but the person's prompt rows, result rows and the engine's group rows say which view
+// is open. The last one heard is mirrored here so every tool site leaves that view to the engine.
+// A module variable, so a hot reload forgets it until one of those rows draws again.
 let isExpandedView = false;
 
 function isCompact(surface: string): boolean {
   return surface === "terminal" && !isExpandedView;
 }
 
+// A result row's own flag, which Claude Code 2.1.302 does not send yet: undefined there.
+function expandedFlag(props: object): boolean | undefined {
+  return "isExpanded" in props && typeof props.isExpanded === "boolean"
+    ? props.isExpanded
+    : undefined;
+}
+
+// Tool rows keep their last answer until asked again, so a switch of view redraws them.
+function noteView($: EngineInterface, isExpanded: boolean | undefined): void {
+  if (isExpanded === undefined || isExpanded === isExpandedView) return;
+  isExpandedView = isExpanded;
+  $.ui.invalidate("ui.render");
+}
+
+// MARK: Home
+
+// The current user's home folder, read once: only it is written as `~` on a line.
+let home: Promise<string | undefined> | undefined;
+
+function homeOf($: EngineInterface): Promise<string | undefined> {
+  home ??= $.env.get("HOME").catch(() => undefined);
+  return home;
+}
+
 // MARK: Detail pane
 
 const PANE = "tool-detail";
 const detail = atom({ plugin: "tool-lines", key: "detail" } as const, null);
+
+// The newest facts heard for each call, from its row's drawings and its completion, so a click
+// on a row the terminal has not redrawn yet, and an open pane, show where the call stands now.
+// A module variable: after a hot reload the rows' next drawings fill it again.
+const latest = new Map<string, Partial<ToolFacts>>();
+const LATEST_LIMIT = 500;
+
+/** Records facts for a call; true when they changed what was known. */
+function remember(id: string, facts: Partial<ToolFacts>): boolean {
+  const known = latest.get(id);
+  const before: Record<string, unknown> = { ...known };
+  const isChanged =
+    known === undefined ||
+    Object.entries(facts).some(([key, value]) => before[key] !== value);
+  latest.delete(id);
+  latest.set(id, { ...known, ...facts });
+  if (latest.size > LATEST_LIMIT) {
+    const oldest = latest.keys().next();
+    if (oldest.done !== true) latest.delete(oldest.value);
+  }
+  return isChanged;
+}
+
+const newest = (call: ToolDetail): ToolDetail => ({
+  ...call,
+  ...latest.get(call.id),
+});
+
+// The call the pane shows, mirrored from the atom so a row's drawing can tell whether its news
+// reaches the pane without subscribing every row to the selection.
+let shownId: string | null = null;
+
+// Opens and closes run one after another, so a close still settling never undoes a newer open.
+let transitions: Promise<unknown> = Promise.resolve();
+
+function serially(work: () => Promise<void>): Promise<void> {
+  const run = transitions.then(work, work);
+  transitions = run.catch(() => undefined);
+  return run;
+}
+
+/** Whether the engine has the pane open: its record, not the module's; undefined if unknown. */
+async function isPaneOpen($: EngineInterface): Promise<boolean | undefined> {
+  try {
+    return (await $.ui.panes()).some((pane) => pane.id === PANE);
+  } catch {
+    return undefined;
+  }
+}
 
 // MARK: Hooks
 
@@ -166,11 +333,7 @@ export const register: Register = (on) => {
     "ui.render",
     { component: "UserMessage", props: { origin: { kind: "composer" } } },
     async ($, e, next) => {
-      if (e.surface === "terminal" && e.props.isExpanded !== isExpandedView) {
-        isExpandedView = e.props.isExpanded;
-        // Tool rows keep their last answer until asked again, so the switch has to redraw them.
-        $.ui.invalidate("ui.render");
-      }
+      if (e.surface === "terminal") noteView($, e.props.isExpanded);
       if (!isCompact(e.surface)) return next(e);
       const { Box } = $.ui.resolve(e);
       return Box({
@@ -184,7 +347,11 @@ export const register: Register = (on) => {
   on("ui.render", { component: "ToolUse" }, async ($, e, next) => {
     if (!isCompact(e.surface)) return next(e);
     const { Box, Text, Button } = $.ui.resolve(e);
-    const line = lineFor(e.props, e.viewport?.columns ?? FALLBACK_COLUMNS);
+    const line = lineFor(
+      e.props,
+      e.viewport?.columns ?? FALLBACK_COLUMNS,
+      await homeOf($),
+    );
     const row: ToolDetail = {
       id: e.props.tool_use_id,
       tool: e.props.tool,
@@ -196,19 +363,38 @@ export const register: Register = (on) => {
     };
 
     // The dot and the label underline together under the pointer, to show they take the click.
-    const hover = { scope: `open-${row.id}`, underline: true } as const;
+    const hover = { scope: hoverScope(row.id), underline: true } as const;
 
-    // A click on the call the pane already shows closes it.
-    const toggleDetail = async () => {
-      const shown = await update($, detail, (current) =>
-        current?.id === row.id ? null : row,
-      );
-      if (shown === null) {
-        await $.ui.close({ id: PANE });
-        return;
-      }
-      await $.ui.open({ id: PANE, title: `${row.tool} call` });
-    };
+    const { id: _id, ...facts } = row;
+    // The pane shows this call: a redrawn row carries news the pane must draw too.
+    if (remember(row.id, facts) && row.id === shownId) {
+      $.ui.invalidate("ui.render");
+    }
+
+    // A click on the call the open pane shows closes it; any other click opens this call.
+    const toggleDetail = () =>
+      serially(async () => {
+        const current = await read($, detail);
+        if (current?.id === row.id && (await isPaneOpen($)) !== false) {
+          // The ui.close hook clears the selection once the pane is gone.
+          await $.ui.close({ id: PANE });
+          return;
+        }
+        await update($, detail, () => newest(row));
+        shownId = row.id;
+        try {
+          await $.ui.open({ id: PANE, title: `${row.tool} call` });
+        } catch (error) {
+          // Refused: forget the selection, so the next click opens the pane again.
+          if ((await isPaneOpen($)) !== true) {
+            await update($, detail, (shown) =>
+              shown?.id === row.id ? null : shown,
+            );
+            shownId = null;
+          }
+          throw error;
+        }
+      });
 
     return Box({
       flexDirection: "row",
@@ -271,41 +457,59 @@ export const register: Register = (on) => {
 
   // Unfolding hands each grouped read or search to the ToolUse hook, so it flows like every other call.
   on("ui.render", { component: "ToolGroup" }, async ($, e, next) => {
+    // The engine's own flag, before this hook unfolds the group: true only in an expanded view.
+    if (e.surface === "terminal") noteView($, e.props.isExpanded);
     if (!isCompact(e.surface)) return next(e);
     return next({ ...e, props: { ...e.props, isExpanded: true } });
   });
 
   // The compact line already carries what the result block would say.
   on("ui.render", { component: "ToolResult" }, async ($, e, next) => {
+    if (e.surface === "terminal") noteView($, expandedFlag(e.props));
     if (!isCompact(e.surface)) return next(e);
     const { Box } = $.ui.resolve(e);
     return Box({});
   });
 
-  // A call opened while it ran gets its result once it lands.
+  // Every call's result is kept as it lands, so a click on a row drawn before it shows it, and
+  // a call opened while it ran gets it in the pane.
   on("tool.call", async ($, e, next) => {
     const ran = await next(e);
-    const shown = await read($, detail);
-    if (shown?.id !== e.tool_use_id) return ran;
     const isErrored = ran.deny !== undefined || ran.isError === true;
-    const output = ran.deny ?? (ran.isError ? ran.text : ran.result);
+    // An abort reaches the call's chain as its signal: the row will read interrupted.
+    const facts = {
+      isRunning: false,
+      isErrored,
+      isInterrupted: isErrored && next.signal.aborted,
+      // An error's text is what the model read; a structured error with none keeps its result.
+      output: ran.deny ?? (ran.isError ? (ran.text ?? ran.result) : ran.result),
+    };
+    remember(e.tool_use_id, facts);
     await update($, detail, (current) =>
-      current?.id === e.tool_use_id
-        ? { ...current, isRunning: false, isErrored, output }
-        : current,
+      current?.id === e.tool_use_id ? { ...current, ...facts } : current,
     );
     return ran;
   }).catch(($, e, next) => next(e)); // The pane is a view: a failure here never touches the call.
 
-  // Closed by a click, its close mark or Esc, the next click on the same line opens it again.
+  // Closed by a click, its close mark or Esc, the next click on the same line opens it again. A
+  // refused close keeps the pane, and with it the call it shows.
   on("ui.close", { id: PANE }, async ($, e, next) => {
-    await update($, detail, () => null);
-    return next(e);
+    const closing = await read($, detail);
+    const closed = await next(e);
+    if (closed.deny === undefined) {
+      await update($, detail, (current) =>
+        current?.id === closing?.id ? null : current,
+      );
+      if (shownId === closing?.id) shownId = null;
+    }
+    return closed;
   }).catch(($, e, next) => next(e)); // A failed clear never keeps the pane open.
 
   on("ui.render", { component: "Pane", requestId: PANE }, async ($, e) => {
     const { Box, Text, Code } = $.ui.resolve(e);
-    const shown = await read($, detail);
+    const selected = await read($, detail);
+    shownId = selected?.id ?? null;
+    const shown = selected === null ? null : newest(selected);
     if (shown === null)
       return Text({
         dimColor: true,

@@ -1,7 +1,13 @@
 import type { RenderPropsOf } from "claude-code";
-import { expect, test, type Mounted, type TestBody } from "claude-code/testing";
+import {
+  expect,
+  mock,
+  test,
+  type Mounted,
+  type TestBody,
+} from "claude-code/testing";
 
-import { shortenSubject } from "../hooks/register";
+import { shortenCommand, shortenPaths } from "../hooks/register";
 
 type TestDollar = Parameters<TestBody>[0];
 type TestOn = Parameters<TestBody>[1];
@@ -68,6 +74,8 @@ function mount<C extends RowComponent>(
   });
 }
 
+const HOME = "/Users/arya";
+
 // Stands for what the engine draws at any site the mod passes on.
 function fakeEngine(on: TestOn) {
   on("ui.render", () => ({ type: "Text", props: {}, children: ["engine"] }));
@@ -84,7 +92,21 @@ function fakePanes(on: TestOn): Set<string> {
     open.delete(e.id);
     return { value: undefined };
   });
+  answerPanes(on, open);
   return open;
+}
+
+// Answers `$.ui.panes()` from a set of open pane ids, as the engine's record does.
+function answerPanes(on: TestOn, open: ReadonlySet<string>) {
+  on("ui.panes", () => ({
+    value: [...open].map((id) => ({
+      id,
+      title: id,
+      isShown: true,
+      isFocused: false,
+      isPlaced: true,
+    })),
+  }));
 }
 
 // Nested Text children read as one line, the way the terminal paints them.
@@ -129,7 +151,8 @@ async function paneText($: TestDollar): Promise<string> {
 
 // MARK: ToolUse
 
-test("draws a tool call as one compact line with its meta", async ($) => {
+test("draws a tool call as one compact line with its meta", async ($, on) => {
+  mock.env(on, { HOME });
   expect(await lineOf(await mount($, "ToolUse", BASH_ROW))).toBe(
     'tool_call: Bash(grep -rn "needle" packages) - shell cwd was reset',
   );
@@ -182,7 +205,8 @@ test("leaves running to the dot and marks errored calls", async ($) => {
   expect(await lineOf(failed)).toMatch(/\) - error$/);
 });
 
-test("names a file tool by its path", async ($) => {
+test("names a file tool by its path", async ($, on) => {
+  mock.env(on, { HOME });
   const ui = await mount($, "ToolUse", {
     ...BASH_ROW,
     tool: "Read",
@@ -218,6 +242,34 @@ test("leaves tool rows to the engine while ctrl+o is open", async ($, on) => {
 
   await mount($, "UserMessage", prompt(false));
   expect(await drawnBy("ToolUse", BASH_ROW)).toMatch(/^●tool_call: Bash/);
+});
+
+test("a result row that says it is expanded draws in full, with no prompt row seen", async ($, on) => {
+  fakeEngine(on);
+  // A fresh module, as after a hot reload: no composer prompt has drawn yet.
+  // Spread from a constant: Claude Code 2.1.302, which CI pins, types no isExpanded on a
+  // result row, and later releases send it.
+  const expanded = { isExpanded: true };
+  const result = await mount($, "ToolResult", { ...RESULT_PROPS, ...expanded });
+  expect(shown(await result.drawn())).toBe("engine");
+  // The view it reported reaches the tool rows too.
+  expect(shown(await (await mount($, "ToolUse", BASH_ROW)).drawn())).toBe(
+    "engine",
+  );
+});
+
+test("a group row the engine draws expanded reports the expanded view", async ($, on) => {
+  fakeEngine(on);
+  await $.ui.mount({
+    plugin: "tool-lines",
+    surface: "terminal",
+    component: "ToolGroup",
+    props: { calls: [], isActive: false, isExpanded: true },
+    viewport: { columns: 200, rows: 50 },
+  });
+  expect(shown(await (await mount($, "ToolUse", BASH_ROW)).drawn())).toBe(
+    "engine",
+  );
 });
 
 // MARK: ToolGroup
@@ -263,31 +315,81 @@ test("hides the result block", async ($) => {
 // MARK: Subject
 
 test("drops shell setup so the line starts at the command that does the work", () => {
-  expect(shortenSubject('T=/private/tmp/x/types/a.d.ts; grep -n "x" $T')).toBe(
-    'grep -n "x" $T',
-  );
-  expect(shortenSubject("set -e; cd ~/dev/mod && cat a.json")).toBe(
+  expect(
+    shortenCommand('T=/private/tmp/x/types/a.d.ts; grep -n "x" $T', HOME),
+  ).toBe('grep -n "x" $T');
+  expect(shortenCommand("set -e; cd ~/dev/mod && cat a.json", HOME)).toBe(
     "cat a.json",
   );
-  expect(shortenSubject("A=1 && B=2; ls")).toBe("ls");
+  expect(shortenCommand("A=1 && B=2; ls", HOME)).toBe("ls");
+});
+
+test("stops shell setup at the first command separator", () => {
+  expect(shortenCommand("cd site;pwd; ls", HOME)).toBe("pwd; ls");
+  expect(shortenCommand("cd a&&b", HOME)).toBe("b");
+});
+
+test("keeps a command that is all setup", () => {
+  expect(shortenCommand("X=1;", HOME)).toBe("X=1;");
+  expect(shortenCommand("cd /tmp &&", HOME)).toBe("cd /tmp &&");
+});
+
+test("keeps shell operators outside shortened paths", () => {
+  expect(shortenCommand("cat /a/b/c/d>/tmp/log", HOME)).toBe(
+    "cat …/c/d>/tmp/log",
+  );
+  expect(shortenCommand("cat /a/b/c/d|/usr/local/bin/sort", HOME)).toBe(
+    "cat …/c/d|…/bin/sort",
+  );
+  expect(shortenCommand("cat /a/b/c/d;echo /x/y/z/w", HOME)).toBe(
+    "cat …/c/d;echo …/z/w",
+  );
 });
 
 test("writes home as ~ and keeps the last two segments of a long path", () => {
-  expect(shortenSubject("/Users/arya/notes.md")).toBe("~/notes.md");
+  expect(shortenPaths("/Users/arya/notes.md", HOME)).toBe("~/notes.md");
   expect(
-    shortenSubject(
+    shortenCommand(
       "cat /private/tmp/claude-501/bundled/types/claude-code.d.ts",
+      HOME,
     ),
   ).toBe("cat …/types/claude-code.d.ts");
-  expect(shortenSubject("/Users/arya/dev/mod/hooks/register.ts")).toBe(
+  expect(shortenPaths("/Users/arya/dev/mod/hooks/register.ts", HOME)).toBe(
     "…/hooks/register.ts",
   );
 });
 
-test("leaves URLs whole", () => {
+test("writes only the current home as ~", () => {
+  expect(shortenCommand("cat /home/alice/a /home/bob/a", "/home/alice")).toBe(
+    "cat ~/a …/bob/a",
+  );
+  expect(shortenCommand("ls /Users/arya2/a", HOME)).toBe("ls …/arya2/a");
+  expect(shortenCommand("cat /home/bob/a", undefined)).toBe("cat …/bob/a");
+});
+
+test("leaves URLs whole, in a command too", () => {
   expect(
-    shortenSubject("https://github.com/Tickloop/claude-mods/tree/main"),
+    shortenCommand("https://github.com/Tickloop/claude-mods/tree/main", HOME),
   ).toBe("https://github.com/Tickloop/claude-mods/tree/main");
+  expect(
+    shortenCommand("curl -s https://example.com/Users/arya/a/b/c/d", HOME),
+  ).toBe("curl -s https://example.com/Users/arya/a/b/c/d");
+});
+
+test("shortens only the fields that hold a command or a path", async ($, on) => {
+  mock.env(on, { HOME });
+  const subject = async (tool: string, input: object) =>
+    lineOf(await mount($, "ToolUse", { ...BASH_ROW, tool, input }));
+
+  expect(
+    await subject("WebFetch", { url: "https://example.com/Users/arya/x" }),
+  ).toContain("(https://example.com/Users/arya/x)");
+  expect(await subject("Grep", { pattern: "cd src && build" })).toContain(
+    "(cd src && build)",
+  );
+  expect(
+    await subject("Read", { file_path: "/Users/arya/dev/a/b/c.md" }),
+  ).toContain("(…/b/c.md)");
 });
 
 // MARK: Detail pane
@@ -411,4 +513,343 @@ test("shows an edit as a diff and a read as numbered file lines", async ($, on) 
   });
   await readCall.press({ key: "detail" });
   expect(await paneText($)).toContain("hello");
+});
+
+// MARK: Pane state
+
+const runningRow = (id: string): Row => ({
+  ...BASH_ROW,
+  tool_use_id: id,
+  isRunning: true,
+  output: undefined,
+});
+
+test("a call that finished before the click shows its result, not running", async ($, on) => {
+  fakePanes(on);
+  on("tool.call", () => ({
+    result: { stdout: "finished", stderr: "", interrupted: false },
+  }));
+  // The row still carries its running snapshot: the terminal has not redrawn it.
+  const ui = await mount($, "ToolUse", runningRow("toolu_done"));
+  await $.tool.call({ tool: "Bash", command: "ls", tool_use_id: "toolu_done" });
+  await ui.press({ key: "detail" });
+
+  const text = await paneText($);
+  expect(text).toContain("finished");
+  expect(text).not.toContain("running");
+});
+
+test("an open call the row redraws as interrupted reads interrupted in the pane", async ($, on) => {
+  fakePanes(on);
+  await (
+    await mount($, "ToolUse", runningRow("toolu_cut"))
+  ).press({
+    key: "detail",
+  });
+  await mount($, "ToolUse", {
+    ...runningRow("toolu_cut"),
+    isRunning: false,
+    isErrored: true,
+    isInterrupted: true,
+    output: "Interrupted by user",
+  });
+
+  const text = await paneText($);
+  expect(text).toContain("interrupted");
+  expect(text).not.toContain("· error");
+});
+
+test("a click on another line while the pane closes leaves that line's call open", async ($, on) => {
+  const open = new Set<string>();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  on("ui.open", (_$, e) => {
+    open.add(e.id);
+    return { value: { isPlaced: true } };
+  });
+  on("ui.close", async (_$, e) => {
+    await gate;
+    open.delete(e.id);
+    return { value: undefined };
+  });
+  answerPanes(on, open);
+  const a = await mount($, "ToolUse", { ...BASH_ROW, tool_use_id: "toolu_a" });
+  const b = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    tool_use_id: "toolu_b",
+    input: { command: "echo second" },
+  });
+  await a.press({ key: "detail" });
+
+  const closing = a.press({ key: "detail" });
+  const opening = b.press({ key: "detail" });
+  release?.();
+  await Promise.all([closing, opening]);
+
+  expect(open.has("tool-detail")).toBe(true);
+  expect(await paneText($)).toContain("echo second");
+});
+
+test("a click after a refused open tries to open the pane again", async ($, on) => {
+  const open = new Set<string>();
+  let refusals = 1;
+  on("ui.open", (_$, e) => {
+    if (refusals > 0) {
+      refusals -= 1;
+      return { deny: "not now" };
+    }
+    open.add(e.id);
+    return { value: { isPlaced: true } };
+  });
+  on("ui.close", (_$, e) => {
+    open.delete(e.id);
+    return { value: undefined };
+  });
+  answerPanes(on, open);
+  const ui = await mount($, "ToolUse", BASH_ROW);
+  await ui.press({ key: "detail" }).catch(() => undefined);
+  expect(open.has("tool-detail")).toBe(false);
+
+  await ui.press({ key: "detail" });
+  expect(open.has("tool-detail")).toBe(true);
+});
+
+test("a refused close keeps the pane's call", async ($, on) => {
+  on("ui.open", () => ({ value: { isPlaced: true } }));
+  on("ui.close", () => ({ deny: "kept open" }));
+  answerPanes(on, new Set(["tool-detail"]));
+  const ui = await mount($, "ToolUse", BASH_ROW);
+  await ui.press({ key: "detail" });
+  await ui.press({ key: "detail" }).catch(() => undefined);
+
+  expect(await paneText($)).toContain("needle");
+});
+
+// MARK: Pane renderers
+
+async function paneFor($: TestDollar, on: TestOn, row: Partial<Row>) {
+  fakePanes(on);
+  await (
+    await mount($, "ToolUse", { ...BASH_ROW, tool_use_id: "toolu_r", ...row })
+  ).press({ key: "detail" });
+  return paneText($);
+}
+
+test("a tool that is not Bash shows its whole result, stdout or not", async ($, on) => {
+  const text = await paneFor($, on, {
+    tool: "mcp__acme__ask",
+    input: { question: "x" },
+    output: { stdout: "ok", answer: 42 },
+  });
+  expect(text).toContain('"answer": 42');
+});
+
+test("a write that updated a file with no diff shows its content, not matches", async ($, on) => {
+  const text = await paneFor($, on, {
+    tool: "Write",
+    input: { file_path: "/a.md", content: "new" },
+    output: {
+      type: "update",
+      filePath: "/a.md",
+      content: "new",
+      structuredPatch: [],
+      originalFile: null,
+    },
+  });
+  expect(text).not.toContain("Matches");
+  expect(text).toContain("Content");
+  expect(text).toContain("new");
+});
+
+test("a staged write reads as held for review, not as written", async ($, on) => {
+  const text = await paneFor($, on, {
+    tool: "Write",
+    input: { file_path: "/a.md", content: "new" },
+    output: {
+      type: "create",
+      filePath: "/a.md",
+      content: "new",
+      structuredPatch: [],
+      originalFile: null,
+      staged: true,
+    },
+  });
+  expect(text).not.toContain("Created");
+  expect(text).toContain("the file is unchanged");
+});
+
+test("a background or saved Bash result names its task and its saved output", async ($, on) => {
+  const text = await paneFor($, on, {
+    output: {
+      stdout: "",
+      stderr: "",
+      interrupted: false,
+      backgroundTaskId: "b1",
+      persistedOutputPath: "/tmp/out.txt",
+    },
+  });
+  expect(text).toContain("b1");
+  expect(text).toContain("/tmp/out.txt");
+  expect(text).not.toContain("(no output)");
+});
+
+test("terminal escapes and carriage returns never reach a Code element", async ($, on) => {
+  const text = await paneFor($, on, {
+    output: {
+      stdout: "\u001b[31mfailed\u001b[0m\nprogress 10%\rprogress 100%\u0007",
+      stderr: "",
+      interrupted: false,
+    },
+  });
+  expect(text).toContain("failed\nprogress 100%␇");
+  expect(text).not.toContain("\u001b");
+  expect(text).not.toContain("\r");
+});
+
+// MARK: Limits
+
+test("a long call id still draws its row, its hover scope within 64 characters", async ($) => {
+  const id = "toolu_" + "x".repeat(60);
+  const ui = await mount($, "ToolUse", { ...BASH_ROW, tool_use_id: id });
+  const scopes = buttonHovers(await ui.drawn()).map((hover) =>
+    typeof hover === "object" && hover !== null && "scope" in hover
+      ? String(hover.scope)
+      : "",
+  );
+  expect(scopes.length).toBe(2);
+  expect(scopes[0] === scopes[1] && (scopes[0] ?? "").length <= 64).toBe(true);
+});
+
+// Terminal cells of a line of ASCII and CJK ideographs: an ideograph takes two.
+const cells = (text: string) =>
+  text.length + (text.match(/[\u4e00-\u9fff]/gu) ?? []).length;
+
+test("cuts a wide-character subject by terminal cells, so the line fits", async ($) => {
+  const ui = await mount(
+    $,
+    "ToolUse",
+    {
+      ...BASH_ROW,
+      tool: "Read",
+      input: { file_path: "界".repeat(110) },
+      output: { type: "text" },
+    },
+    150,
+  );
+  const line = await lineOf(ui);
+  expect(cells(line) <= 150 - 4 - 2).toBe(true);
+  expect(line).toMatch(/…\)$/);
+});
+
+test("never cuts an emoji in half", async ($) => {
+  const lines = await Promise.all(
+    [60, 61, 150, 151].map(async (columns) =>
+      lineOf(
+        await mount(
+          $,
+          "ToolUse",
+          { ...BASH_ROW, input: { command: "echo " + "😀".repeat(200) } },
+          columns,
+        ),
+      ),
+    ),
+  );
+  // A lone surrogate, or the replacement character the drawing puts in its place.
+  const halves =
+    /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]|\ufffd/;
+  expect(lines.filter((line) => halves.test(line))).toEqual([]);
+});
+
+// MARK: Meta
+
+test("reports a shell reset only from the engine's own line at the end of stderr", async ($) => {
+  const ui = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    input: { command: "cat hooks/register.ts" },
+    output: {
+      stdout: '  stream.includes("Shell cwd was reset")',
+      stderr: "",
+      interrupted: false,
+    },
+  });
+  expect(await lineOf(ui)).toBe("tool_call: Bash(cat hooks/register.ts)");
+});
+
+// MARK: Surfaces
+
+test("leaves every row to the engine on a surface other than the terminal", async ($, on) => {
+  fakeEngine(on);
+  for (const surface of ["desktop", "vscode", "mobile"] as const) {
+    for (const [component, props] of [
+      ["ToolUse", BASH_ROW],
+      ["ToolResult", RESULT_PROPS],
+    ] as const) {
+      // oxlint-disable-next-line no-await-in-loop -- one surface at a time keeps the kit's order
+      const ui = await $.ui.mount({
+        plugin: "tool-lines",
+        surface,
+        component,
+        props,
+        viewport: { columns: 200, rows: 50 },
+      });
+      // oxlint-disable-next-line no-await-in-loop -- as above
+      expect(shown(await ui.drawn())).toBe("engine");
+    }
+  }
+});
+
+test("an interrupted call with no output has a red dot and says interrupted", async ($) => {
+  const ui = await mount($, "ToolUse", {
+    ...BASH_ROW,
+    isErrored: false,
+    isInterrupted: true,
+    output: undefined,
+  });
+  expect((await ui.find({ type: "Text", text: "●" }))?.props.color).toBe(
+    "error",
+  );
+  expect(await lineOf(ui)).toMatch(/\) - interrupted$/);
+});
+
+// MARK: Review follow-ups
+
+test("a tool named like an Object member still shows its JSON", async ($, on) => {
+  const text = await paneFor($, on, {
+    tool: "toString",
+    input: {},
+    output: { answer: 42 },
+  });
+  expect(text).toContain('"answer": 42');
+});
+
+test("a carriage return overwrites only what the later text reaches", async ($, on) => {
+  const text = await paneFor($, on, {
+    output: {
+      stdout: "abcdef\rxy\ncomplete\r\nprogress 10%\rprogress 100%",
+      stderr: "",
+      interrupted: false,
+    },
+  });
+  expect(text).toContain("xycdef\ncomplete\nprogress 100%");
+});
+
+test("an errored call with a structured result and no text keeps the result", async ($, on) => {
+  fakePanes(on);
+  on("tool.call", () => ({ isError: true, result: { code: 7 } }));
+  const ui = await mount($, "ToolUse", {
+    ...runningRow("toolu_struct"),
+    tool: "mcp__acme__run",
+  });
+  await $.tool.call({ tool: "mcp__acme__run", tool_use_id: "toolu_struct" });
+  await ui.press({ key: "detail" });
+
+  expect(await paneText($)).toContain('"code": 7');
+});
+
+test("a Bash result with neither stream shows its JSON, not (no output)", async ($, on) => {
+  const text = await paneFor($, on, { output: { code: 7 } });
+  expect(text).toContain('"code": 7');
+  expect(text).not.toContain("(no output)");
 });

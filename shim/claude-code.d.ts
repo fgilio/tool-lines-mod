@@ -128,7 +128,25 @@ declare module "claude-code" {
     isFullscreen?: boolean;
   };
 
-  export type PromptOrigin = { kind: string };
+  export type PromptOrigin =
+    | {
+        kind:
+          | "composer"
+          | "bridge"
+          | "sdk"
+          | "task-notification"
+          | "scheduled-trigger"
+          | "peer"
+          | "peer-send-message"
+          | "projects-relay"
+          | "coordinator"
+          | "observer"
+          | "observer-activity"
+          | "auto-continuation"
+          | "unclassified"
+          | "slack-ping";
+      }
+    | { kind: "channel" | "plugin"; name: string };
 
   export type ToolGroupCall = {
     tool_use_id?: string;
@@ -225,6 +243,14 @@ declare module "claude-code" {
     origin: { kind: "plugin" | "person" | "unload" };
   };
 
+  export type UiPane = {
+    id: string;
+    title: string;
+    isShown: boolean;
+    isFocused: boolean;
+    isPlaced: boolean;
+  };
+
   export type UiOpenResult =
     | { isPlaced: true }
     | { isPlaced: false; reason: string };
@@ -242,6 +268,10 @@ declare module "claude-code" {
       resolve: (e: { surface: RenderSurface }) => ElementTable;
       open: (pane: PaneOpenArgs) => Promise<UiOpenResult>;
       close: (pane: PaneCloseArgs) => Promise<void>;
+      panes: () => Promise<readonly UiPane[]>;
+    };
+    env: {
+      get: (name: string) => Promise<string | undefined>;
     };
   }
 
@@ -252,6 +282,7 @@ declare module "claude-code" {
     "tool.call": ToolCallInput;
     "ui.open": PaneOpenArgs;
     "ui.close": PaneCloseInput;
+    "ui.panes": Record<string, never>;
   };
 
   export type ResultOf = {
@@ -259,15 +290,27 @@ declare module "claude-code" {
     "tool.call": ToolCallResult;
     "ui.open": ValueOrDeny<UiOpenResult>;
     "ui.close": ValueOrDeny<void>;
+    "ui.panes": ValueOrDeny<readonly UiPane[]>;
   };
 
   export type EventName = keyof EventOf;
 
-  export type Next<E, R> = (e: E) => Promise<R>;
+  /** Read-only to every depth, as the engine hands a hook its `e`. */
+  export type Frozen<T> = T extends string | ((...args: never[]) => unknown)
+    ? T
+    : T extends readonly unknown[]
+      ? { [K in keyof T]: Frozen<T[K]> }
+      : T extends object
+        ? { readonly [K in keyof T]: Frozen<T[K]> }
+        : T;
+
+  export type Next<E, R> = ((e: E) => Promise<R>) & {
+    readonly signal: AbortSignal;
+  };
 
   export type Hook<E, R> = (
     $: EngineInterface,
-    e: E,
+    e: Frozen<E>,
     next: Next<E, R>,
   ) => R | Promise<R>;
 
@@ -275,7 +318,7 @@ declare module "claude-code" {
 
   export type CatchHandler<E, R> = (
     $: EngineInterface,
-    e: E,
+    e: Frozen<E>,
     next: Next<E, R> & Caught,
   ) => R | undefined | Promise<R | undefined>;
 
@@ -313,6 +356,7 @@ declare module "claude-code/testing" {
     RenderPropsOf,
     RenderSurface,
     RenderViewport,
+    ToolCallResult,
   } from "claude-code";
 
   export type FoundElement = {
@@ -356,6 +400,11 @@ declare module "claude-code/testing" {
   };
 
   export type Engine = {
+    tool: {
+      call: (
+        input: { tool: string; tool_use_id?: string } & Record<string, unknown>,
+      ) => Promise<ToolCallResult>;
+    };
     ui: {
       mount: <P extends RenderSurface, C extends RenderComponent>(
         target: MountTarget<P, C>,
@@ -366,6 +415,10 @@ declare module "claude-code/testing" {
   export type TestBody = ($: Engine, on: On) => unknown;
 
   export const test: (name: string, body: TestBody) => void;
+
+  export const mock: {
+    env: (on: On, variables: Readonly<Record<string, string>>) => void;
+  };
 
   export type Matchers = {
     toBe: (expected: unknown) => void;
