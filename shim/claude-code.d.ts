@@ -128,7 +128,25 @@ declare module "claude-code" {
     isFullscreen?: boolean;
   };
 
-  export type PromptOrigin = { kind: string };
+  export type PromptOrigin =
+    | {
+        kind:
+          | "composer"
+          | "bridge"
+          | "sdk"
+          | "task-notification"
+          | "scheduled-trigger"
+          | "peer"
+          | "peer-send-message"
+          | "projects-relay"
+          | "coordinator"
+          | "observer"
+          | "observer-activity"
+          | "auto-continuation"
+          | "unclassified"
+          | "slack-ping";
+      }
+    | { kind: "channel" | "plugin"; name: string };
 
   export type ToolGroupCall = {
     tool_use_id?: string;
@@ -263,11 +281,22 @@ declare module "claude-code" {
 
   export type EventName = keyof EventOf;
 
-  export type Next<E, R> = (e: E) => Promise<R>;
+  /** Read-only to every depth, as the engine hands a hook its `e`. */
+  export type Frozen<T> = T extends string | ((...args: never[]) => unknown)
+    ? T
+    : T extends readonly unknown[]
+      ? { [K in keyof T]: Frozen<T[K]> }
+      : T extends object
+        ? { readonly [K in keyof T]: Frozen<T[K]> }
+        : T;
+
+  export type Next<E, R> = ((e: E) => Promise<R>) & {
+    readonly signal: AbortSignal;
+  };
 
   export type Hook<E, R> = (
     $: EngineInterface,
-    e: E,
+    e: Frozen<E>,
     next: Next<E, R>,
   ) => R | Promise<R>;
 
@@ -275,7 +304,7 @@ declare module "claude-code" {
 
   export type CatchHandler<E, R> = (
     $: EngineInterface,
-    e: E,
+    e: Frozen<E>,
     next: Next<E, R> & Caught,
   ) => R | undefined | Promise<R | undefined>;
 
